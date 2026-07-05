@@ -7,7 +7,15 @@ export enum AppState {
 }
 
 export type CandidateStatus = "needs_review" | "usable" | "regenerate";
-export type ProviderStatus = "mock_preview" | "gemini_ready" | "api_key_missing" | "generation_failed";
+export type ProviderStatus = "mock_preview" | "openai_ready" | "api_key_missing" | "generation_failed";
+export type OpenAIImageQuality = "low" | "medium" | "high" | "auto";
+
+export interface ProviderSettings {
+  openaiApiKey: string;
+  imageModel: string;
+  imageQuality: OpenAIImageQuality;
+  saveKeyLocally: boolean;
+}
 
 export interface HairStylePreset {
   id: string;
@@ -30,7 +38,7 @@ export interface QualityCheck {
 }
 
 export interface GenerationMetadata {
-  provider: "gemini" | "mock";
+  provider: "openai" | "mock";
   providerStatus: ProviderStatus;
   styleId: string;
   styleName: string;
@@ -90,4 +98,5 @@ export interface GenerationRequest {
   consultationNote?: string;
   variantStart?: number;
   forceMock?: boolean;
+  providerSettings?: ProviderSettings;
 }

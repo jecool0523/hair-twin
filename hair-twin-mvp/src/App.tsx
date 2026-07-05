@@ -5,11 +5,14 @@ import {
   Download,
   Eye,
   ImagePlus,
+  KeyRound,
   Loader2,
   RotateCcw,
   Save,
   Scissors,
+  ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
   UserRound,
   X,
@@ -18,7 +21,12 @@ import {
 import CameraFeed, { CameraFeedHandle } from "./components/CameraFeed";
 import CandidateCard from "./components/CandidateCard";
 import { HAIR_STYLE_PRESETS, STORAGE_KEYS } from "./constants";
-import { generateHairStyleCandidates, getGenerationProviderStatus } from "./services/generationService";
+import {
+  generateHairStyleCandidates,
+  getGenerationFailureMessage,
+  getGenerationFailureStatus,
+  getGenerationProviderStatus
+} from "./services/generationService";
 import { readStoredJson, writeStoredJson } from "./services/storage";
 import {
   AppState,
@@ -27,6 +35,7 @@ import {
   ConsultationSession,
   GeneratedCandidate,
   HairStylePreset,
+  ProviderSettings,
   ProviderStatus,
   QualityCheck
 } from "./types";
@@ -41,9 +50,16 @@ const defaultNote = (): ConsultationNote => ({
   updatedAt: new Date().toISOString()
 });
 
+const defaultProviderSettings = (): ProviderSettings => ({
+  openaiApiKey: "",
+  imageModel: "gpt-image-2",
+  imageQuality: "medium",
+  saveKeyLocally: false
+});
+
 const providerLabel: Record<ProviderStatus, string> = {
   mock_preview: "Mock Preview",
-  gemini_ready: "Gemini Ready",
+  openai_ready: "GPT Images Ready",
   api_key_missing: "API Key Missing",
   generation_failed: "Generation Failed"
 };
@@ -140,16 +156,27 @@ function App() {
   const [cameraIssue, setCameraIssue] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [savedReview, setSavedReview] = useState<GeneratedCandidate | null>(null);
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings>(defaultProviderSettings);
   const [progressText, setProgressText] = useState("헤어스타일 후보를 준비 중입니다.");
   const [hasLoadedStoredNote, setHasLoadedStoredNote] = useState(false);
+  const [hasLoadedStoredProviderSettings, setHasLoadedStoredProviderSettings] = useState(false);
 
   const cameraRef = useRef<CameraFeedHandle>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const isGenerating = appState === AppState.GENERATING;
 
   useEffect(() => {
     setSavedCandidates(readStoredJson<GeneratedCandidate[]>(STORAGE_KEYS.candidates, []));
     setNote(readStoredJson<ConsultationNote>(STORAGE_KEYS.note, defaultNote()));
+    const storedProviderSettings = readStoredJson<ProviderSettings>(
+      STORAGE_KEYS.providerSettings,
+      defaultProviderSettings()
+    );
+    const nextProviderSettings = { ...defaultProviderSettings(), ...storedProviderSettings };
+    setProviderSettings(nextProviderSettings);
+    setProviderStatus(getGenerationProviderStatus(nextProviderSettings.openaiApiKey));
     setHasLoadedStoredNote(true);
+    setHasLoadedStoredProviderSettings(true);
   }, []);
 
   useEffect(() => {
@@ -158,12 +185,16 @@ function App() {
   }, [hasLoadedStoredNote, note]);
 
   useEffect(() => {
+    if (!hasLoadedStoredProviderSettings || isGenerating) return;
+    setProviderStatus(getGenerationProviderStatus(providerSettings.openaiApiKey));
+  }, [hasLoadedStoredProviderSettings, isGenerating, providerSettings.openaiApiKey]);
+
+  useEffect(() => {
     if (!toastMsg) return;
     const timer = window.setTimeout(() => setToastMsg(null), 2400);
     return () => window.clearTimeout(timer);
   }, [toastMsg]);
 
-  const isGenerating = appState === AppState.GENERATING;
   const selectedStyleTags = useMemo(() => selectedStyle.promptTags.join(" · "), [selectedStyle]);
 
   const currentSession = useMemo<ConsultationSession>(
@@ -213,7 +244,7 @@ function App() {
     setCandidates([]);
     setErrorMsg(null);
     setCameraIssue(null);
-    setProviderStatus(getGenerationProviderStatus());
+    setProviderStatus(getGenerationProviderStatus(providerSettings.openaiApiKey));
     setNote((prev) => ({
       ...prev,
       customerAlias: sourceType === "sample" && !prev.customerAlias ? "샘플 고객" : prev.customerAlias,
@@ -259,7 +290,7 @@ function App() {
 
     setErrorMsg(null);
     setProgressText(`${style.nameKo} 후보 3개를 생성 중입니다.`);
-    setProviderStatus(forceMock ? "mock_preview" : getGenerationProviderStatus());
+    setProviderStatus(forceMock ? "mock_preview" : getGenerationProviderStatus(providerSettings.openaiApiKey));
     setAppState(AppState.GENERATING);
 
     try {
@@ -268,15 +299,19 @@ function App() {
         style,
         count: 3,
         consultationNote: note.memo,
-        forceMock
+        forceMock,
+        providerSettings: {
+          ...providerSettings,
+          openaiApiKey: providerSettings.openaiApiKey.trim()
+        }
       });
       setCandidates(result);
-      setProviderStatus(result[0]?.metadata.providerStatus ?? (forceMock ? "mock_preview" : getGenerationProviderStatus()));
+      setProviderStatus(result[0]?.metadata.providerStatus ?? (forceMock ? "mock_preview" : getGenerationProviderStatus(providerSettings.openaiApiKey)));
       setAppState(AppState.RESULTS);
     } catch (error) {
       console.error(error);
-      setProviderStatus("generation_failed");
-      setErrorMsg("이미지 생성에 실패했습니다. 기존 사진과 선택 스타일은 유지됩니다.");
+      setProviderStatus(getGenerationFailureStatus(error));
+      setErrorMsg(getGenerationFailureMessage(error));
       setAppState(AppState.ERROR);
     }
   };
@@ -294,15 +329,19 @@ function App() {
         count: 1,
         consultationNote: note.memo,
         variantStart: candidate.metadata.variantIndex + 3,
-        forceMock: candidate.metadata.isMock
+        forceMock: candidate.metadata.isMock,
+        providerSettings: {
+          ...providerSettings,
+          openaiApiKey: providerSettings.openaiApiKey.trim()
+        }
       });
       setCandidates((prev) => prev.map((item) => (item.id === candidate.id ? replacement : item)));
       setProviderStatus(replacement.metadata.providerStatus);
       setAppState(AppState.RESULTS);
     } catch (error) {
       console.error(error);
-      setProviderStatus("generation_failed");
-      setErrorMsg("재생성에 실패했습니다. 기존 후보는 유지됩니다.");
+      setProviderStatus(getGenerationFailureStatus(error));
+      setErrorMsg(getGenerationFailureMessage(error));
       setAppState(AppState.ERROR);
     }
   };
@@ -396,13 +435,40 @@ function App() {
     setToastMsg("원본 사진 저장 동의를 표시했습니다.");
   };
 
+  const saveProviderSettings = () => {
+    const storedSettings: ProviderSettings = providerSettings.saveKeyLocally
+      ? {
+          ...providerSettings,
+          openaiApiKey: providerSettings.openaiApiKey.trim()
+        }
+      : {
+          ...providerSettings,
+          openaiApiKey: ""
+        };
+    writeStoredJson(STORAGE_KEYS.providerSettings, storedSettings);
+    setProviderStatus(getGenerationProviderStatus(providerSettings.openaiApiKey));
+    setToastMsg(
+      providerSettings.saveKeyLocally
+        ? "OpenAI API 설정을 이 브라우저에 저장했습니다."
+        : "API 키 저장 없이 현재 세션 설정만 적용했습니다."
+    );
+  };
+
+  const clearProviderKey = () => {
+    const nextSettings = { ...providerSettings, openaiApiKey: "", saveKeyLocally: false };
+    setProviderSettings(nextSettings);
+    writeStoredJson(STORAGE_KEYS.providerSettings, nextSettings);
+    setProviderStatus(getGenerationProviderStatus(""));
+    setToastMsg("저장된 OpenAI API 키를 삭제했습니다.");
+  };
+
   const resetSession = () => {
     setSessionId(createSessionId());
     setSourceImage(null);
     setCandidates([]);
     setErrorMsg(null);
     setCameraIssue(null);
-    setProviderStatus(getGenerationProviderStatus());
+    setProviderStatus(getGenerationProviderStatus(providerSettings.openaiApiKey));
     setNote(defaultNote());
     setAppState(AppState.CAPTURE);
   };
@@ -477,7 +543,7 @@ function App() {
             <div className="inline-guidance">
               {cameraIssue && <p>{cameraIssue}</p>}
               {providerStatus === "api_key_missing" && (
-                <p>Gemini API 키가 없어 실제 생성 대신 mock preview로 후보를 확인합니다.</p>
+                <p>OpenAI API 키가 없거나 실제 생성이 비활성화되어 mock preview로 후보를 확인합니다.</p>
               )}
               <div>
                 <button type="button" onClick={() => photoInputRef.current?.click()}>
@@ -564,6 +630,89 @@ function App() {
               <strong>{selectedStyle.nameKo}</strong>
               <p>{selectedStyle.consultationSummary}</p>
               <small>{selectedStyleTags}</small>
+            </div>
+          </section>
+
+          <section className="glass-panel panel-block api-settings-panel">
+            <span className="section-label">API Settings</span>
+            <h2>GPT Images 연결</h2>
+            <div className="api-status-row">
+              <div className={`provider-chip ${providerStatus}`}>
+                <span />
+                {providerLabel[providerStatus]}
+              </div>
+              <small>{providerSettings.openaiApiKey.trim() ? "키 입력됨" : "키 필요"}</small>
+            </div>
+            <div className="api-fields">
+              <label>
+                <span>OpenAI API Key</span>
+                <div className="api-key-input">
+                  <KeyRound size={16} />
+                  <input
+                    type="password"
+                    value={providerSettings.openaiApiKey}
+                    placeholder="sk-..."
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) =>
+                      setProviderSettings((prev) => ({ ...prev, openaiApiKey: event.target.value }))
+                    }
+                  />
+                </div>
+              </label>
+              <div className="api-field-grid">
+                <label>
+                  <span>Model</span>
+                  <input
+                    value={providerSettings.imageModel}
+                    placeholder="gpt-image-2"
+                    onChange={(event) =>
+                      setProviderSettings((prev) => ({ ...prev, imageModel: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  <span>Quality</span>
+                  <select
+                    value={providerSettings.imageQuality}
+                    onChange={(event) =>
+                      setProviderSettings((prev) => ({
+                        ...prev,
+                        imageQuality: event.target.value as ProviderSettings["imageQuality"]
+                      }))
+                    }
+                  >
+                    <option value="medium">medium</option>
+                    <option value="low">low</option>
+                    <option value="high">high</option>
+                    <option value="auto">auto</option>
+                  </select>
+                </label>
+              </div>
+              <label className="api-save-row">
+                <input
+                  type="checkbox"
+                  checked={providerSettings.saveKeyLocally}
+                  onChange={(event) =>
+                    setProviderSettings((prev) => ({ ...prev, saveKeyLocally: event.target.checked }))
+                  }
+                />
+                <span>이 브라우저에 키 저장</span>
+              </label>
+            </div>
+            <p className="api-security-note">
+              <ShieldCheck size={15} />
+              로컬 MVP 테스트용입니다. 저장을 켜면 API 키가 이 브라우저의 localStorage에 보관됩니다.
+            </p>
+            <div className="api-actions">
+              <button type="button" onClick={saveProviderSettings}>
+                <Save size={16} />
+                설정 적용
+              </button>
+              <button type="button" onClick={clearProviderKey}>
+                <Trash2 size={16} />
+                키 삭제
+              </button>
             </div>
           </section>
 

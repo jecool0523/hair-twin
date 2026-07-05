@@ -63,7 +63,7 @@ function CandidateCard({
       <div className="candidate-meta">
         <SplitSquareHorizontal size={15} />
         <span>체크 {checkedCount}/6</span>
-        <span>{candidate.metadata.provider === "mock" ? "Mock preview" : "Gemini"}</span>
+        <span>{candidate.metadata.provider === "mock" ? "Mock preview" : "GPT Images"}</span>
       </div>
 
       <QualityChecklist

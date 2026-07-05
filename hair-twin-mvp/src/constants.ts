@@ -133,5 +133,6 @@ export const QUALITY_LABELS: Array<{ key: keyof QualityCheck; label: string }> =
 
 export const STORAGE_KEYS = {
   candidates: "hair-twin.saved-candidates",
-  note: "hair-twin.consultation-note"
+  note: "hair-twin.consultation-note",
+  providerSettings: "hair-twin.provider-settings"
 } as const;

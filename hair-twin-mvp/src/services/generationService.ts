@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import { EMPTY_QUALITY_CHECK } from "../constants";
 import { GeneratedCandidate, GenerationRequest, HairStylePreset, ProviderStatus } from "../types";
 
@@ -11,9 +10,6 @@ Hair Twin salon consultation constraints:
 - Make the result look like a natural, realistic salon consultation preview.
 - Avoid changing non-hair regions. Keep the photo composition and lighting stable.
 `;
-
-const cleanBase64 = (dataUrl: string) =>
-  dataUrl.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
 
 const createCandidateId = () =>
   `candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -38,7 +34,7 @@ Selected hairstyle preset:
 - Variant direction: ${variantGuidance}
 ${consultationNote ? `- Stylist note to consider: ${consultationNote}` : ""}
 
-Return a photorealistic result image. The customer should recognize themselves immediately.`;
+Return a photorealistic image edit. The customer should recognize themselves immediately.`;
 };
 
 const createCandidate = (
@@ -46,7 +42,7 @@ const createCandidate = (
   request: GenerationRequest,
   prompt: string,
   variantIndex: number,
-  provider: "gemini" | "mock",
+  provider: "openai" | "mock",
   durationMs: number,
   providerStatus: ProviderStatus,
   warning?: string
@@ -214,6 +210,109 @@ interface ImageGenerationProvider {
   generateCandidates(request: GenerationRequest): Promise<GeneratedCandidate[]>;
 }
 
+export class HairGenerationError extends Error {
+  status?: number;
+  retryDelaySeconds?: number;
+  isQuotaError: boolean;
+  userMessage: string;
+
+  constructor({
+    message,
+    status,
+    retryDelaySeconds,
+    isQuotaError,
+    userMessage
+  }: {
+    message: string;
+    status?: number;
+    retryDelaySeconds?: number;
+    isQuotaError: boolean;
+    userMessage: string;
+  }) {
+    super(message);
+    this.name = "HairGenerationError";
+    this.status = status;
+    this.retryDelaySeconds = retryDelaySeconds;
+    this.isQuotaError = isQuotaError;
+    this.userMessage = userMessage;
+  }
+}
+
+const parseProviderErrorPayload = (error: unknown) => {
+  if (error instanceof HairGenerationError) {
+    return {
+      rawMessage: error.message,
+      code: error.status,
+      message: error.userMessage,
+      retryDelaySeconds: error.retryDelaySeconds
+    };
+  }
+
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const jsonStart = rawMessage.indexOf("{");
+
+  if (jsonStart >= 0) {
+    try {
+      const payload = JSON.parse(rawMessage.slice(jsonStart));
+      const retryAfter = payload?.retryAfterSeconds ?? payload?.error?.retryAfterSeconds;
+      return {
+        rawMessage,
+        code: payload?.status ?? payload?.error?.status ?? payload?.error?.code,
+        message: payload?.error?.message ?? payload?.message,
+        type: payload?.error?.type,
+        codeName: payload?.error?.code,
+        retryDelaySeconds: typeof retryAfter === "number" ? retryAfter : undefined
+      };
+    } catch {
+      return { rawMessage };
+    }
+  }
+
+  return { rawMessage };
+};
+
+const normalizeGenerationError = (error: unknown): HairGenerationError => {
+  if (error instanceof HairGenerationError) return error;
+
+  const parsed = parseProviderErrorPayload(error);
+  const combined = `${parsed.type ?? ""} ${parsed.codeName ?? ""} ${parsed.message ?? parsed.rawMessage}`.toLowerCase();
+  const isQuotaError =
+    parsed.code === 429 ||
+    combined.includes("quota") ||
+    combined.includes("rate_limit") ||
+    combined.includes("insufficient_quota");
+  const isMissingKey =
+    parsed.code === 401 ||
+    combined.includes("openai_api_key") ||
+    combined.includes("api key");
+
+  const retryText = parsed.retryDelaySeconds ? ` ${parsed.retryDelaySeconds}초 뒤 다시 시도할 수 있습니다.` : "";
+  const quotaMessage =
+    "OpenAI GPT Images 할당량 또는 rate limit에 걸렸습니다. 결제/쿼터 설정을 확인하거나 Mock으로 상담 흐름을 계속 테스트하세요.";
+  const missingKeyMessage =
+    "OPENAI_API_KEY가 로컬 서버 환경변수에 없습니다. hair-twin-mvp/.env.local에 OPENAI_API_KEY를 설정한 뒤 dev server를 재시작하세요.";
+
+  return new HairGenerationError({
+    message: parsed.rawMessage,
+    status: typeof parsed.code === "number" ? parsed.code : undefined,
+    retryDelaySeconds: parsed.retryDelaySeconds,
+    isQuotaError,
+    userMessage: isQuotaError
+      ? `${quotaMessage}${retryText}`
+      : isMissingKey
+        ? missingKeyMessage
+        : "OpenAI GPT Images 생성에 실패했습니다. API 키, 모델명, 결제/권한, 네트워크 상태를 확인하거나 Mock으로 계속 테스트하세요."
+  });
+};
+
+export const getGenerationFailureMessage = (error: unknown) =>
+  normalizeGenerationError(error).userMessage;
+
+export const getGenerationFailureStatus = (error: unknown): ProviderStatus => {
+  const normalized = normalizeGenerationError(error);
+  return normalized.status === 401 ? "api_key_missing" : "generation_failed";
+};
+
 class MockHairProvider implements ImageGenerationProvider {
   async generateCandidates(request: GenerationRequest): Promise<GeneratedCandidate[]> {
     const startedAt = performance.now();
@@ -232,8 +331,10 @@ class MockHairProvider implements ImageGenerationProvider {
           variantIndex,
           "mock",
           Math.round(performance.now() - startedAt),
-          "api_key_missing",
-          "VITE_GEMINI_API_KEY가 없어 mock preview provider로 생성되었습니다."
+          request.forceMock ? "mock_preview" : "api_key_missing",
+          request.forceMock
+            ? "OpenAI 호출 대신 mock preview provider로 생성되었습니다."
+            : "OPENAI_API_KEY가 없어 mock preview provider로 생성되었습니다."
         )
       );
     }
@@ -242,64 +343,68 @@ class MockHairProvider implements ImageGenerationProvider {
   }
 }
 
-class GeminiHairProvider implements ImageGenerationProvider {
-  private ai: GoogleGenAI;
-
-  constructor(apiKey: string) {
-    this.ai = new GoogleGenAI({ apiKey });
-  }
-
+class OpenAIHairProvider implements ImageGenerationProvider {
   async generateCandidates(request: GenerationRequest): Promise<GeneratedCandidate[]> {
     const start = request.variantStart ?? 1;
     const startedAt = performance.now();
+    const results: GeneratedCandidate[] = [];
 
-    return Promise.all(
-      Array.from({ length: request.count }, async (_, index) => {
+    try {
+      for (let index = 0; index < request.count; index += 1) {
         const variantIndex = start + index;
         const prompt = buildHairStylePrompt(request.style, variantIndex, request.consultationNote);
-        const response = await this.ai.models.generateContent({
-          model: "gemini-2.5-flash-image",
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: "image/jpeg",
-                  data: cleanBase64(request.sourceImage)
-                }
-              },
-              { text: prompt }
-            ]
-          }
+        const response = await fetch("/api/hair-twin/generate-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sourceImage: request.sourceImage,
+            prompt,
+            variantIndex,
+            apiKey: request.providerSettings?.openaiApiKey,
+            model: request.providerSettings?.imageModel,
+            quality: request.providerSettings?.imageQuality
+          })
         });
 
-        const parts = response.candidates?.[0]?.content?.parts ?? [];
-        const imagePart = parts.find((part) => part.inlineData?.data);
-
-        if (!imagePart?.inlineData?.data) {
-          throw new Error("이미지 생성 응답에서 결과 이미지를 찾지 못했습니다.");
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(JSON.stringify({ status: response.status, ...(payload ?? {}) }));
         }
 
-        return createCandidate(
-          `data:image/png;base64,${imagePart.inlineData.data}`,
-          request,
-          prompt,
-          variantIndex,
-          "gemini",
-          Math.round(performance.now() - startedAt),
-          "gemini_ready"
+        if (!payload?.image) {
+          throw new Error("OpenAI image edit response did not include an image.");
+        }
+
+        results.push(
+          createCandidate(
+            payload.image,
+            request,
+            prompt,
+            variantIndex,
+            "openai",
+            Math.round(performance.now() - startedAt),
+            "openai_ready",
+            payload.model ? `Generated with ${payload.model}` : undefined
+          )
         );
-      })
-    );
+      }
+
+      return results;
+    } catch (error) {
+      throw normalizeGenerationError(error);
+    }
   }
 }
 
-export const getGenerationProviderStatus = (): ProviderStatus =>
-  import.meta.env.VITE_GEMINI_API_KEY ? "gemini_ready" : "api_key_missing";
+export const getGenerationProviderStatus = (apiKey?: string): ProviderStatus =>
+  import.meta.env.VITE_FORCE_MOCK_GENERATION === "true"
+    ? "mock_preview"
+    : apiKey?.trim()
+      ? "openai_ready"
+      : "api_key_missing";
 
-const createProvider = (): ImageGenerationProvider => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  return apiKey ? new GeminiHairProvider(apiKey) : new MockHairProvider();
-};
+const createProvider = (): ImageGenerationProvider =>
+  import.meta.env.VITE_FORCE_MOCK_GENERATION === "true" ? new MockHairProvider() : new OpenAIHairProvider();
 
 export const generateHairStyleCandidates = (request: GenerationRequest) =>
   request.forceMock ? new MockHairProvider().generateCandidates(request) : createProvider().generateCandidates(request);

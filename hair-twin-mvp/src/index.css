@@ -156,7 +156,7 @@ button:disabled {
   box-shadow: 0 0 14px currentColor;
 }
 
-.provider-chip.gemini_ready span {
+.provider-chip.openai_ready span {
   background: #86efac;
 }
 
@@ -507,7 +507,9 @@ button:disabled {
 
 .note-fields input,
 .note-fields textarea,
-.quality-header select {
+.quality-header select,
+.api-fields input,
+.api-fields select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 12px;
@@ -519,6 +521,133 @@ button:disabled {
 .note-fields input {
   height: 42px;
   padding: 0 12px;
+}
+
+.api-settings-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.api-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.api-status-row small {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.api-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.api-fields label {
+  display: grid;
+  gap: 7px;
+}
+
+.api-fields label > span {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.api-key-input {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.api-key-input svg {
+  color: #7dd3fc;
+}
+
+.api-key-input input {
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.api-field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 10px;
+}
+
+.api-fields input,
+.api-fields select {
+  height: 42px;
+  padding: 0 12px;
+}
+
+.api-save-row {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px !important;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.api-save-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: #7dd3fc;
+}
+
+.api-security-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: #fde68a;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.api-security-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.api-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.api-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.api-actions button:hover {
+  border-color: rgba(125, 211, 252, 0.58);
+  background: rgba(125, 211, 252, 0.12);
 }
 
 .note-fields textarea {
@@ -951,7 +1080,8 @@ button:disabled {
 
   .consultation-panel,
   .style-grid,
-  .comparison-frame.side-by-side {
+  .comparison-frame.side-by-side,
+  .api-field-grid {
     grid-template-columns: 1fr;
   }
 
