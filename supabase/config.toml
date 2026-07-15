@@ -1,0 +1,45 @@
+# Supabase local configuration.
+#
+# NOTE: project_id is a LOCAL container namespace, not a remote project ref.
+# No remote project is linked yet — see docs/decisions/ADR-0005.
+project_id = "hair-twin"
+
+[api]
+enabled = true
+port = 54321
+# Only `public` is exposed over the API. `private` holds the RLS helper
+# functions and must never be reachable from PostgREST.
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.pooler]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3100"
+additional_redirect_urls = ["http://localhost:3100"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[storage]
+enabled = true
+# Customer face images are not small, but they are not huge either.
+file_size_limit = "10MiB"
+
+[analytics]
+enabled = false
