@@ -1,0 +1,151 @@
+"use client";
+import type { MaskSummary } from "../domain/masks";
+import type { SessionView } from "../dto";
+import type { StylistVerdict } from "../domain/types";
+
+/**
+ * Requests never hang forever: a slow salon network must surface as a readable
+ * error the stylist can retry, not an indefinite spinner. Uploads get a longer
+ * budget than plain reads because they carry image bytes.
+ */
+const DEFAULT_TIMEOUT_MS = 15_000;
+const UPLOAD_TIMEOUT_MS = 45_000;
+
+async function req<T>(
+  url: string,
+  init?: RequestInit,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(
+        `네트워크 응답이 ${Math.round(timeoutMs / 1000)}초 안에 오지 않았습니다. 연결을 확인하고 다시 시도해 주세요.`,
+        0,
+      );
+    }
+    throw new ApiError(
+      "네트워크에 연결할 수 없습니다. 연결을 확인하고 다시 시도해 주세요.",
+      0,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const body = (await res.json().catch(() => ({}))) as
+    | T
+    | { error?: string; detail?: unknown };
+  if (!res.ok) {
+    const message =
+      (body as { error?: string }).error ?? `요청 실패 (${res.status})`;
+    throw new ApiError(message, res.status);
+  }
+  return body as T;
+}
+
+export class ApiError extends Error {
+  status: number;
+  /** 0 means the request never reached the server (timeout/offline). */
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export const api = {
+  startSession: (input: { stylistName: string; customerAlias: string }) =>
+    req<{ sessionId: string; stage: string }>("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  getSession: (id: string) => req<SessionView>(`/api/sessions/${id}`),
+
+  consent: (
+    id: string,
+    input: {
+      captureConsented: true;
+      saveImagesConsented: boolean;
+      saveReportConsented: boolean;
+      wordingVersion: string;
+    },
+  ) =>
+    req<{ stage: string }>(`/api/sessions/${id}/consent`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  uploadSource: (
+    id: string,
+    input: {
+      dataUrl: string;
+      width: number;
+      height: number;
+      preflight: {
+        faceCount: number;
+        passed: boolean;
+        engine: "mediapipe" | "heuristic";
+      };
+    },
+  ) =>
+    req<{ sourceImageId: string; sourceUrl: string; expiresAt?: string }>(
+      `/api/sessions/${id}/source`,
+      { method: "POST", body: JSON.stringify(input) },
+      UPLOAD_TIMEOUT_MS, // carries image bytes
+    ),
+
+  createJob: (
+    id: string,
+    input: {
+      styleId: string;
+      candidateCount: number;
+      maskSummary: MaskSummary;
+    },
+  ) =>
+    req<{ jobId: string; status: string }>(`/api/sessions/${id}/jobs`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  retryJob: (jobId: string) =>
+    req<{ jobId: string; status: string; attempts: number }>(
+      `/api/jobs/${jobId}/retry`,
+      { method: "POST" },
+    ),
+
+  setVerdict: (candidateId: string, verdict: StylistVerdict) =>
+    req<{ candidateId: string; verdict: StylistVerdict }>(
+      `/api/candidates/${candidateId}/verdict`,
+      { method: "POST", body: JSON.stringify({ verdict }) },
+    ),
+
+  saveNote: (
+    id: string,
+    note: {
+      memoKo: string;
+      feasibility: "easy" | "moderate" | "hard" | "";
+      estimatedPrice: string;
+      estimatedTime: string;
+      careNotesKo: string;
+    },
+  ) =>
+    req<{ note: unknown }>(`/api/sessions/${id}/note`, {
+      method: "POST",
+      body: JSON.stringify(note),
+    }),
+
+  decide: (id: string, action: "save" | "discard", candidateIds: string[]) =>
+    req<{ stage: string }>(`/api/sessions/${id}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ action, candidateIds }),
+    }),
+};
