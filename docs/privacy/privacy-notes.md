@@ -25,6 +25,38 @@ as architecture (system-design §9), not just copy.
 - **Audit log.** capture, job create/complete/fail, media view, save, discard
   are recorded via `appendAudit`.
 
+## Media handling (ADR-0006)
+
+- **No base64 image transport.** Uploads are multipart; the server decides the
+  real format/dimensions from the bytes and rejects spoofed types.
+- **Masks and region maps are sensitive.** They describe the customer's hairline
+  and face region, so they are stored privately with the same expiry as the
+  source photo and swept together with it.
+- **Retention actually deletes.** `POST /api/maintenance/retention-sweep`
+  (shared-secret authenticated, schedule-triggered) removes unsaved expired
+  source images, masks, region maps, and candidates. An `expires_at` alone is a
+  promise; this is the implementation. Verified by tests.
+
+## Face embeddings and QC intermediates — storage decision
+
+- **Face embeddings are NOT stored.** Today the mock emits simulated identity
+  signals and no embedding exists. When real identity scoring lands (Python
+  worker), the embedding must be computed **in memory only**; persist the
+  derived similarity score, never the vector. An embedding is biometric-grade
+  data and storing it would materially change our PIPA exposure.
+- **QC intermediates**: only the final `QualitySignals` numbers + status are
+  persisted (`quality_checks`). Diff maps and other intermediates are not stored.
+- **Masks/region maps ARE stored** (privately, expiring) because generation and
+  retry need them; they are deleted by the same sweep as the photo.
+
+## Offshore AI provider transfer — separate boundary
+
+Sending a customer's face to an AI provider outside Korea is a **separate
+personal-information transfer**, not covered by the current capture consent.
+Before the OpenAI adapter is wired it requires: its own consent item, a provider
+data-processing review (no training on submitted data), and legal sign-off.
+The adapter is deliberately left unwired for this reason (ADR-0006).
+
 ## DRAFT items requiring legal review (임시)
 
 - Consent wording (`CONSENT_WORDING_VERSION = draft-ko-2026-07`). Marked as a
