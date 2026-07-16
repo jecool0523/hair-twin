@@ -136,35 +136,39 @@ export function ConsultationConsole({
 
   const onCapture = (p: CapturePayload) =>
     withBusy(async () => {
-      await api.uploadSource(sessionId, {
-        dataUrl: p.dataUrl,
-        width: p.width,
-        height: p.height,
+      // Multipart: raw image bytes + the region map derived from that photo.
+      // The server probes the real format/dimensions and derives the mask
+      // contract; we keep only its id.
+      const { maskContractId } = await api.uploadSource(sessionId, {
+        blob: p.blob,
+        regionMap: p.regionMap,
         preflight: {
           faceCount: p.preflight.faceCount,
           passed: p.preflight.passed,
           engine: p.preflight.engine,
         },
       });
-      // Stash mask summary for the job step.
-      maskSummaryRef.current = p.maskSummary;
+      maskContractIdRef.current = maskContractId;
       await refresh(sessionId);
     });
 
-  const maskSummaryRef = useRef<CapturePayload["maskSummary"] | null>(null);
+  /** The persisted contract this capture produced. No client-side fallback: a
+   *  job must reference real masks or not run at all. */
+  const maskContractIdRef = useRef<string | null>(null);
 
   const onGenerate = (styleId: string, candidateCount: number) =>
     withBusy(async () => {
-      const maskSummary =
-        maskSummaryRef.current ?? {
-          version: "mask-contract-1",
-          hairCurrentCoverage: 0.14,
-          hairEditCoverage: 0.18,
-          faceProtectCoverage: 0.22,
-          backgroundProtectCoverage: 0.4,
-          expansionRadius: 6,
-        };
-      await api.createJob(sessionId, { styleId, candidateCount, maskSummary });
+      const maskContractId = maskContractIdRef.current;
+      if (!maskContractId) {
+        throw new Error(
+          "촬영 분석 데이터가 없습니다. 다시 촬영한 뒤 진행해 주세요.",
+        );
+      }
+      await api.createJob(sessionId, {
+        styleId,
+        candidateCount,
+        maskContractId,
+      });
       await refresh(sessionId);
     });
 
@@ -224,7 +228,7 @@ export function ConsultationConsole({
         customerAlias: "익명 고객",
       });
       setSelectedForSave(new Set());
-      maskSummaryRef.current = null;
+      maskContractIdRef.current = null;
       router.push(`/consultation/${newId}`);
     } catch (e) {
       setStarting(false);

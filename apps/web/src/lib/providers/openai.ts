@@ -16,6 +16,7 @@ import type {
   HairGenerationProvider,
   HairGenerationRequest,
   HairGenerationResult,
+  ProviderAssetLoader,
 } from "./adapter";
 import { ProviderError } from "./adapter";
 
@@ -31,9 +32,9 @@ export class OpenAIHairProvider implements HairGenerationProvider {
 
   async generate(
     request: HairGenerationRequest,
-    getSourceBytes: (assetId: string) => Promise<Buffer | undefined>,
+    assets: ProviderAssetLoader,
   ): Promise<HairGenerationResult> {
-    const source = await getSourceBytes(request.sourceAssetId);
+    const source = await assets.loadSource(request.sourceAssetId);
     if (!source) {
       throw new ProviderError({
         message: "source image bytes missing",
@@ -42,12 +43,30 @@ export class OpenAIHairProvider implements HairGenerationProvider {
       });
     }
 
-    // NOTE: real implementation should send source + hair_edit mask PNG to
-    // /v1/images/edits, then run CV-based QC to fill QualitySignals. That work
-    // belongs in the Python worker (workers/ai-worker). This bridge is left as
-    // an explicit not-yet-wired path so the interface is honest.
+    // The real hair-edit mask is already reachable through the same adapter
+    // contract the mock uses — this is exactly what /v1/images/edits needs as
+    // its `mask` part, so wiring the call is a fill-in, not a redesign:
+    //
+    //   const mask = await assets.loadMask(request.masks.assetIds.hair_edit);
+    //   form.append("image", new Blob([source]), "source.png");
+    //   form.append("mask", new Blob([mask]), "hair-edit-mask.png");
+    //   form.append("prompt", request.prompt.positive);
+    //
+    // Still deliberately unwired: a real call needs the provider data-processing
+    // review (customer faces leaving the country — ADR-0006 privacy boundary)
+    // and CV-based QualitySignals, which belong in the Python worker.
+    const maskBytes = await assets.loadMask(request.masks.assetIds.hair_edit);
+    if (!maskBytes) {
+      throw new ProviderError({
+        message: "hair_edit mask bytes missing",
+        retryable: false,
+        userMessageKo:
+          "헤어 편집 마스크를 찾을 수 없습니다. 다시 촬영해 주세요.",
+      });
+    }
+
     throw new ProviderError({
-      message: "OpenAI adapter is scaffolded but not wired for the first slice",
+      message: "OpenAI adapter is scaffolded but not wired (see ADR-0006)",
       retryable: false,
       userMessageKo:
         "실제 OpenAI 생성 경로는 아직 연결되지 않았습니다. 현재는 Mock provider로 상담 흐름을 진행합니다.",

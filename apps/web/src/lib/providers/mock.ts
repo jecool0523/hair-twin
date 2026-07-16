@@ -20,6 +20,7 @@ import type {
   HairGenerationProvider,
   HairGenerationRequest,
   HairGenerationResult,
+  ProviderAssetLoader,
   ProviderCandidate,
 } from "./adapter";
 
@@ -151,10 +152,21 @@ export class MockHairProvider implements HairGenerationProvider {
 
   async generate(
     request: HairGenerationRequest,
+    assets?: ProviderAssetLoader,
   ): Promise<HairGenerationResult> {
     const candidates: ProviderCandidate[] = [];
-    const editCoverage = request.maskSummary.hairEditCoverage;
-    const expansion = request.maskSummary.expansionRadius;
+    // Real, server-derived coverage for THIS photo — different captures produce
+    // different contracts, so they produce different simulated outcomes.
+    const editCoverage = request.masks.coverage.hair_edit;
+    const expansion = request.masks.expansionRadius;
+
+    // Prove the adapter can reach real mask bytes: a real provider posts these
+    // to an image-edit endpoint. The mock only measures them.
+    let hairEditMaskBytes = 0;
+    if (assets) {
+      const bytes = await assets.loadMask(request.masks.assetIds.hair_edit);
+      hairEditMaskBytes = bytes?.length ?? 0;
+    }
 
     for (let idx = 0; idx < request.candidateCount; idx++) {
       const seed = request.seed + idx;
@@ -210,6 +222,13 @@ export class MockHairProvider implements HairGenerationProvider {
           mock: true,
           variant: idx,
           jobId: request.jobId,
+          // Recorded so a stylist/engineer can confirm which real contract
+          // produced this candidate.
+          maskContractId: request.masks.contractId,
+          maskContractAttempt: request.masks.attempt,
+          expansionRadius: expansion,
+          hairEditCoverage: editCoverage,
+          hairEditMaskBytes,
           note: "simulated signals; real metrics come from the Python worker",
         },
       });

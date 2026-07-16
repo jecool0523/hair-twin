@@ -13,10 +13,15 @@ import "server-only";
 import { getStore, newId } from "../store";
 import { createProvider } from "../providers/factory";
 import { ProviderError } from "../providers/adapter";
+import type {
+  MaskContractRef,
+  ProviderAssetLoader,
+} from "../providers/adapter";
+import { loadMaskContractForJob, MaskRejected } from "./masks";
 import { evaluateQuality } from "../domain/quality";
 import { buildHairPrompt } from "../domain/prompt";
 import { getStylePreset } from "../domain/style-presets";
-import { canRetry, retryTuning } from "../domain/job";
+import { canRetry } from "../domain/job";
 import { RETENTION } from "../config";
 import { audit } from "./audit";
 import type { GeneratedCandidate, GenerationJob } from "../domain/types";
@@ -60,11 +65,8 @@ export async function processJob(
     await store.updateJob(jobId, { status: "masking" });
     await sleep(delay);
 
-    // Retry tuning shrinks the edit mask (design §13). We reflect that in the
-    // mask summary passed to the provider so retries measurably reduce risk.
     const job2 = await store.getJob(jobId);
     if (!job2) return undefined;
-    const tuning = attempt > 1 ? retryTuning(attempt) : undefined;
 
     await store.updateJob(jobId, { status: "generating" });
 
@@ -76,18 +78,49 @@ export async function processJob(
       });
     }
 
+    // The REAL masks for this job. Coverage was derived server-side from the
+    // region map of this very photo; nothing here is hardcoded or client-sent.
+    // Retries already re-derived a tighter contract (see retryJob), so the
+    // worker simply uses whatever contract the job points at.
+    let contract;
+    try {
+      contract = await loadMaskContractForJob({
+        contractId: job2.maskContractId,
+        sessionId: job2.sessionId,
+        sourceImageId: job2.sourceImageId,
+      });
+    } catch (err) {
+      if (err instanceof MaskRejected) {
+        await audit(job.sessionId, "job_failed", "worker", {
+          jobId,
+          reason: err.message,
+        });
+        return store.updateJob(jobId, {
+          status: "failed_hard",
+          failureReason: err.userMessageKo,
+        });
+      }
+      throw err;
+    }
+
     const prompt = buildHairPrompt(preset, { stricter: attempt > 1 });
     const provider = createProvider();
 
-    const maskSummary = {
-      version: "mask-contract-1",
-      hairCurrentCoverage: 0.14,
-      hairEditCoverage: tuning
-        ? Math.max(0.05, 0.18 - attempt * 0.03)
-        : 0.18,
-      faceProtectCoverage: 0.22,
-      backgroundProtectCoverage: 0.4,
-      expansionRadius: tuning?.expansionRadius ?? 6,
+    const masks: MaskContractRef = {
+      contractId: contract.id,
+      version: contract.version,
+      attempt: contract.attempt,
+      expansionRadius: contract.expansionRadius,
+      width: contract.width,
+      height: contract.height,
+      assetIds: contract.maskAssetIds as MaskContractRef["assetIds"],
+      regionMapAssetId: contract.regionMapAssetId,
+      coverage: contract.coverage as MaskContractRef["coverage"],
+    };
+
+    const assets: ProviderAssetLoader = {
+      loadSource: (assetId) => store.getAsset(assetId).then((a) => a?.bytes),
+      loadMask: (assetId) => store.getAsset(assetId).then((a) => a?.bytes),
     };
 
     const result = await provider.generate(
@@ -100,7 +133,7 @@ export async function processJob(
         sourceAssetId: source.id,
         sourceWidth: source.width,
         sourceHeight: source.height,
-        maskSummary,
+        masks,
         constraints: {
           preserveIdentity: true,
           preserveBackground: true,
@@ -109,7 +142,7 @@ export async function processJob(
         },
         prompt: { positive: prompt.positive, negative: prompt.negative },
       },
-      (assetId) => store.getAsset(assetId).then((a) => a?.bytes),
+      assets,
     );
 
     await sleep(delay);

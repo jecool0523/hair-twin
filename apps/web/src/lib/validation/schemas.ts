@@ -16,37 +16,30 @@ export const consentSchema = z.object({
   wordingVersion: z.string().min(1),
 });
 
-// Source image is uploaded as a data URL (browser capture/upload). It is stored
-// server-side as bytes; the data URL is not persisted as-is or echoed in JSON.
-export const sourceImageSchema = z.object({
-  dataUrl: z
-    .string()
-    .regex(
-      /^data:image\/(png|jpeg|jpg|webp);base64,/,
-      "dataUrl must be a base64 image data URL",
-    ),
-  width: z.number().int().positive().max(8000),
-  height: z.number().int().positive().max(8000),
-  preflight: z.object({
-    faceCount: z.number().int().nonnegative(),
-    passed: z.boolean(),
-    engine: z.enum(["mediapipe", "heuristic"]),
-  }),
+/**
+ * Capture preflight metadata.
+ *
+ * AUDIT ONLY. These are the browser's own observations about capture quality;
+ * they are recorded so a stylist can see why a photo was flagged, and they are
+ * never used as QC input or as authority over the image. Width/height are NOT
+ * accepted from the client at all — the server reads them from the bytes
+ * (see lib/media/image-probe.ts).
+ */
+export const preflightMetaSchema = z.object({
+  faceCount: z.number().int().nonnegative().max(50).default(0),
+  passed: z.boolean().default(false),
+  engine: z.enum(["mediapipe", "heuristic"]).default("heuristic"),
 });
 
-export const maskSummarySchema = z.object({
-  version: z.string(),
-  hairCurrentCoverage: z.number().min(0).max(1),
-  hairEditCoverage: z.number().min(0).max(1),
-  faceProtectCoverage: z.number().min(0).max(1),
-  backgroundProtectCoverage: z.number().min(0).max(1),
-  expansionRadius: z.number().min(0).max(64),
-});
-
+/**
+ * Job creation references a PERSISTED mask contract by id. The client no longer
+ * sends a mask summary: coverage is whatever the server derived from the real
+ * region-map bytes at capture time (ADR-0006).
+ */
 export const createJobSchema = z.object({
   styleId: z.string().min(1),
   candidateCount: z.number().int().min(1).max(4).default(3),
-  maskSummary: maskSummarySchema,
+  maskContractId: z.string().min(1),
 });
 
 export const decisionSchema = z.object({
@@ -61,7 +54,7 @@ export const saveDecisionSchema = z.object({
 
 export type StartSessionInput = z.infer<typeof startSessionSchema>;
 export type ConsentInput = z.infer<typeof consentSchema>;
-export type SourceImageInput = z.infer<typeof sourceImageSchema>;
+export type PreflightMeta = z.infer<typeof preflightMetaSchema>;
 export type CreateJobInput = z.infer<typeof createJobSchema>;
 export type DecisionInput = z.infer<typeof decisionSchema>;
 export type SaveDecisionInput = z.infer<typeof saveDecisionSchema>;

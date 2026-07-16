@@ -16,7 +16,11 @@ import type {
   SourceImageRef,
 } from "../domain/types";
 
-export type AssetKind = "source" | "candidate";
+/**
+ * Masks and region maps describe the customer's hairline and face region, so
+ * they are stored exactly like the source photo: privately, with an expiry.
+ */
+export type AssetKind = "source" | "candidate" | "mask" | "region_map";
 
 export interface StoredAsset {
   id: string;
@@ -35,6 +39,33 @@ export interface MediaToken {
   token: string;
   assetId: string;
   expiresAt: string;
+}
+
+/**
+ * A persisted mask contract: the server-derived mask set for one source image.
+ *
+ * Coverage here is AUTHORITATIVE — it is computed on the server from the actual
+ * region-map bytes via buildMaskSet(), never taken from a client-supplied
+ * number. A generation job references one of these by id; retries create a new
+ * version with a tighter expansion radius rather than mutating this one.
+ */
+export interface MaskContractRecord {
+  id: string;
+  sessionId: string;
+  sourceImageId: string;
+  version: string; // MASK_CONTRACT_VERSION
+  attempt: number; // which generation attempt produced this version
+  expansionRadius: number;
+  width: number;
+  height: number;
+  /** Derived server-side from the mask bytes. */
+  coverage: Record<string, number>;
+  /** assetId per mask name; bytes live in the private store. */
+  maskAssetIds: Record<string, string>;
+  regionMapAssetId: string;
+  createdAt: string;
+  expiresAt?: string;
+  saved: boolean;
 }
 
 export interface HairTwinStore {
@@ -71,6 +102,14 @@ export interface HairTwinStore {
     patch: Partial<GeneratedCandidate>,
   ): Promise<GeneratedCandidate | undefined>;
   listCandidatesForJob(jobId: string): Promise<GeneratedCandidate[]>;
+
+  // mask contracts (server-derived; see MaskContractRecord)
+  putMaskContract(contract: MaskContractRecord): Promise<MaskContractRecord>;
+  getMaskContract(id: string): Promise<MaskContractRecord | undefined>;
+  /** Newest-first, so a retry can find the latest version for a source. */
+  listMaskContractsForSource(
+    sourceImageId: string,
+  ): Promise<MaskContractRecord[]>;
 
   // media access tokens (short-lived, signed-URL analog)
   issueMediaToken(assetId: string, ttlMs: number): Promise<MediaToken>;

@@ -7,6 +7,11 @@ export const RETENTION = {
   unsavedSourceMs: 24 * 60 * 60 * 1000,
   /** Unsaved candidate lifetime — shorter; they are previews. */
   unsavedCandidateMs: 6 * 60 * 60 * 1000,
+  /**
+   * Masks + region maps. They describe the customer's hairline and face region,
+   * so they expire with the source image, not later.
+   */
+  unsavedMaskMs: 24 * 60 * 60 * 1000,
   /** Media access token TTL (short-lived, signed-URL analog). */
   mediaTokenMs: 5 * 60 * 1000,
   /** Whole session preview lifetime when nothing is saved. */

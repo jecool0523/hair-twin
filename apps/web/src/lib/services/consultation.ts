@@ -14,6 +14,15 @@ import {
   isCustomerVisible,
   notApprovableReason,
 } from "../domain/visibility";
+import { probeImage } from "../media/image-probe";
+import {
+  parseRegionMap,
+  persistMaskContract,
+  loadMaskContractForJob,
+  deriveRetryContract,
+  MaskRejected,
+} from "./masks";
+import { retryTuning } from "../domain/job";
 import {
   CONSENT_WORDING_VERSION,
   DEV_SALON_ID,
@@ -31,9 +40,12 @@ import type {
 import type {
   ConsentInput,
   CreateJobInput,
-  SourceImageInput,
+  PreflightMeta,
   StartSessionInput,
 } from "../validation/schemas";
+
+/** Default plausible-growth ring for the first attempt (design §6). */
+export const DEFAULT_EXPANSION_RADIUS = 6;
 
 export async function startSession(
   input: StartSessionInput,
@@ -91,30 +103,43 @@ export async function recordConsent(
   return session;
 }
 
-function decodeDataUrl(dataUrl: string): { mime: string; bytes: Buffer } {
-  const match = dataUrl.match(
-    /^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/,
-  );
-  if (!match) throw new Error("invalid data url");
-  const mime = match[1] === "image/jpg" ? "image/jpeg" : match[1]!;
-  return { mime, bytes: Buffer.from(match[2]!, "base64") };
+export interface StoreSourceInput {
+  imageBytes: Uint8Array;
+  declaredMime?: string;
+  regionMapBytes: Uint8Array;
+  regionMapWidth: number;
+  regionMapHeight: number;
+  preflight: PreflightMeta;
 }
 
 export async function storeSourceImage(
   sessionId: string,
-  input: SourceImageInput,
-): Promise<{ ref: SourceImageRef; token: string } | undefined> {
+  input: StoreSourceInput,
+): Promise<
+  | { ref: SourceImageRef; token: string; maskContractId: string }
+  | undefined
+> {
   const store = getStore();
   const session = await store.getSession(sessionId);
   if (!session || !session.consent?.captureConsented) return undefined;
 
-  const { mime, bytes } = decodeDataUrl(input.dataUrl);
+  // The server decides what this file actually is. The client's declared MIME
+  // is only checked for agreement, and its claimed width/height are not an
+  // input at all.
+  const probed = probeImage(input.imageBytes, input.declaredMime);
+
+  // Coverage is derived here from the real region-map bytes, never accepted as
+  // a client-supplied number (ADR-0006).
+  const regionMap = parseRegionMap(
+    input.regionMapBytes,
+    input.regionMapWidth,
+    input.regionMapHeight,
+  );
+
   const assetId = newId("asset");
   const now = new Date();
-
-  // Retention: unless the customer consented to saving images, the source
-  // carries an expiry and is swept. It is NEVER stored publicly.
-  const saved = false; // saving is an explicit later action, even with consent
+  // Saving is an explicit later action, even when consent allows it.
+  const saved = false;
   const expiresAt = new Date(
     now.getTime() + RETENTION.unsavedSourceMs,
   ).toISOString();
@@ -123,10 +148,10 @@ export async function storeSourceImage(
     id: assetId,
     kind: "source",
     sessionId,
-    mime,
-    width: input.width,
-    height: input.height,
-    bytes,
+    mime: probed.format,
+    width: probed.width,
+    height: probed.height,
+    bytes: Buffer.from(input.imageBytes),
     createdAt: now.toISOString(),
     expiresAt,
     saved,
@@ -135,27 +160,42 @@ export async function storeSourceImage(
   const ref: SourceImageRef = {
     id: assetId,
     sessionId,
-    mime,
-    width: input.width,
-    height: input.height,
+    mime: probed.format,
+    width: probed.width,
+    height: probed.height,
     createdAt: now.toISOString(),
     expiresAt,
     saved,
   };
   await store.putSourceImage(ref);
+
+  const contract = await persistMaskContract({
+    sessionId,
+    sourceImageId: assetId,
+    regionMap,
+    expansionRadius: DEFAULT_EXPANSION_RADIUS,
+    attempt: 1,
+  });
+
   await store.updateSession(sessionId, {
     sourceImageId: assetId,
     stage: "style",
   });
   await audit(sessionId, "capture_stored", DEV_STYLIST_ID, {
     assetId,
-    faceCount: input.preflight.faceCount,
+    maskContractId: contract.id,
+    format: probed.format,
+    width: probed.width,
+    height: probed.height,
+    // Preflight is recorded for the stylist's benefit; it is not QC input.
+    preflightPassed: input.preflight.passed,
+    preflightFaceCount: input.preflight.faceCount,
     engine: input.preflight.engine,
     expiresAt,
   });
 
   const token = await store.issueMediaToken(assetId, RETENTION.mediaTokenMs);
-  return { ref, token: token.token };
+  return { ref, token: token.token, maskContractId: contract.id };
 }
 
 export async function createGenerationJob(
@@ -167,6 +207,15 @@ export async function createGenerationJob(
   if (!session || !session.sourceImageId) return undefined;
   const preset = getStylePreset(input.styleId);
   if (!preset) return undefined;
+
+  // Bind the job to a real, persisted mask contract. This rejects a contract
+  // from another session/source and one that has already expired, so a job can
+  // never generate against someone else's masks or against stale ones.
+  const contract = await loadMaskContractForJob({
+    contractId: input.maskContractId,
+    sessionId,
+    sourceImageId: session.sourceImageId,
+  });
 
   const now = new Date();
   const job: GenerationJob = {
@@ -182,7 +231,8 @@ export async function createGenerationJob(
     candidateIds: [],
     provider: process.env.HAIR_TWIN_PROVIDER ?? "mock",
     model: "",
-    maskContractVersion: input.maskSummary.version,
+    maskContractId: contract.id,
+    maskContractVersion: contract.version,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
@@ -213,16 +263,49 @@ export async function retryJob(
   if (!canRetry(job.attempts, job.status)) return job;
 
   const nextAttempt = job.attempts + 1;
+
+  // Retry tuning is applied to the REAL contract: re-derive the mask set from
+  // the same persisted region map with a tighter expansion radius, and point the
+  // job at that new version. The previous version stays for auditability.
+  let maskContractId = job.maskContractId;
+  let maskContractVersion = job.maskContractVersion;
+  try {
+    const previous = await loadMaskContractForJob({
+      contractId: job.maskContractId,
+      sessionId: job.sessionId,
+      sourceImageId: job.sourceImageId,
+    });
+    const tuning = retryTuning(nextAttempt);
+    const next = await deriveRetryContract(
+      previous,
+      tuning.expansionRadius,
+      nextAttempt,
+    );
+    maskContractId = next.id;
+    maskContractVersion = next.version;
+  } catch (err) {
+    if (err instanceof MaskRejected) {
+      return store.updateJob(jobId, {
+        status: "failed_hard",
+        failureReason: err.userMessageKo,
+      });
+    }
+    throw err;
+  }
+
   const updated = await store.updateJob(jobId, {
     status: "created",
     attempts: nextAttempt,
     failureReason: undefined,
     candidateIds: [],
+    maskContractId,
+    maskContractVersion,
   });
   await audit(job.sessionId, "job_created", DEV_STYLIST_ID, {
     jobId,
     retry: true,
     attempt: nextAttempt,
+    maskContractId,
   });
   void processJob(jobId, { attempt: nextAttempt }).catch(() => {});
   return updated;

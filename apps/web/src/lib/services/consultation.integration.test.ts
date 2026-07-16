@@ -21,7 +21,7 @@ import {
 import { buildSessionView } from "./views";
 import type { CandidateView } from "../dto";
 import { CONSENT_WORDING_VERSION } from "../config";
-import { encodePng } from "../media/png";
+import { captureInput } from "@/test/fixtures";
 
 const TERMINAL = new Set([
   "completed",
@@ -29,11 +29,6 @@ const TERMINAL = new Set([
   "failed_hard",
 ]);
 
-// A tiny valid PNG data URL as a stand-in captured image.
-function pngDataUrl(): string {
-  const png = encodePng(new Uint8Array(8 * 8 * 4).fill(200), 8, 8);
-  return `data:image/png;base64,${png.toString("base64")}`;
-}
 
 async function waitForTerminal(sessionId: string, jobId: string) {
   for (let i = 0; i < 200; i++) {
@@ -66,12 +61,7 @@ describe("consultation full flow (mock provider)", () => {
     });
 
     // Capture/upload.
-    const src = await storeSourceImage(session.id, {
-      dataUrl: pngDataUrl(),
-      width: 600,
-      height: 800,
-      preflight: { faceCount: 1, passed: true, engine: "heuristic" },
-    });
+    const src = await storeSourceImage(session.id, captureInput());
     expect(src?.ref.id).toBeTruthy();
     // Source is stored temporarily (not saved) with an expiry.
     expect(src?.ref.saved).toBe(false);
@@ -81,14 +71,7 @@ describe("consultation full flow (mock provider)", () => {
     const job = await createGenerationJob(session.id, {
       styleId: "layered-c-curl",
       candidateCount: 3,
-      maskSummary: {
-        version: "mask-contract-1",
-        hairCurrentCoverage: 0.14,
-        hairEditCoverage: 0.18,
-        faceProtectCoverage: 0.22,
-        backgroundProtectCoverage: 0.4,
-        expansionRadius: 6,
-      },
+      maskContractId: src!.maskContractId,
     });
     expect(job).toBeTruthy();
 
@@ -154,23 +137,11 @@ describe("consultation full flow (mock provider)", () => {
       saveReportConsented: false,
       wordingVersion: CONSENT_WORDING_VERSION,
     });
-    await storeSourceImage(session.id, {
-      dataUrl: pngDataUrl(),
-      width: 400,
-      height: 500,
-      preflight: { faceCount: 1, passed: true, engine: "heuristic" },
-    });
+    const src = await storeSourceImage(session.id, captureInput());
     const job = await createGenerationJob(session.id, {
       styleId: "layered-c-curl",
       candidateCount: 3,
-      maskSummary: {
-        version: "mask-contract-1",
-        hairCurrentCoverage: 0.14,
-        hairEditCoverage: 0.18,
-        faceProtectCoverage: 0.22,
-        backgroundProtectCoverage: 0.4,
-        expansionRadius: 6,
-      },
+      maskContractId: src!.maskContractId,
     });
     await waitForTerminal(session.id, job!.id);
 
@@ -229,23 +200,11 @@ describe("consultation full flow (mock provider)", () => {
       saveReportConsented: false,
       wordingVersion: CONSENT_WORDING_VERSION,
     });
-    await storeSourceImage(session.id, {
-      dataUrl: pngDataUrl(),
-      width: 400,
-      height: 500,
-      preflight: { faceCount: 1, passed: true, engine: "heuristic" },
-    });
+    const src = await storeSourceImage(session.id, captureInput());
     const job = await createGenerationJob(session.id, {
       styleId: "see-through-bob",
       candidateCount: 2,
-      maskSummary: {
-        version: "mask-contract-1",
-        hairCurrentCoverage: 0.12,
-        hairEditCoverage: 0.16,
-        faceProtectCoverage: 0.2,
-        backgroundProtectCoverage: 0.4,
-        expansionRadius: 6,
-      },
+      maskContractId: src!.maskContractId,
     });
     await waitForTerminal(session.id, job!.id);
 
@@ -272,12 +231,7 @@ describe("consultation full flow (mock provider)", () => {
       stylistName: "t",
       customerAlias: "c",
     });
-    const result = await storeSourceImage(session.id, {
-      dataUrl: pngDataUrl(),
-      width: 100,
-      height: 100,
-      preflight: { faceCount: 1, passed: true, engine: "heuristic" },
-    });
+    const result = await storeSourceImage(session.id, captureInput());
     expect(result).toBeUndefined();
   });
 
@@ -289,23 +243,11 @@ describe("consultation full flow (mock provider)", () => {
       saveReportConsented: false,
       wordingVersion: CONSENT_WORDING_VERSION,
     });
-    await storeSourceImage(session.id, {
-      dataUrl: pngDataUrl(),
-      width: 300,
-      height: 400,
-      preflight: { faceCount: 1, passed: true, engine: "heuristic" },
-    });
+    const src = await storeSourceImage(session.id, captureInput());
     const job = await createGenerationJob(session.id, {
       styleId: "long-wave",
       candidateCount: 2,
-      maskSummary: {
-        version: "mask-contract-1",
-        hairCurrentCoverage: 0.14,
-        hairEditCoverage: 0.18,
-        faceProtectCoverage: 0.22,
-        backgroundProtectCoverage: 0.4,
-        expansionRadius: 6,
-      },
+      maskContractId: src!.maskContractId,
     });
     await waitForTerminal(session.id, job!.id);
     // Force the job into a retryable state, then retry.

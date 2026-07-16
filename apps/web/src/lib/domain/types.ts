@@ -247,6 +247,12 @@ export interface GenerationJob {
   failureReason?: string; // Korean, user-facing
   provider: string;
   model: string;
+  /**
+   * The persisted mask contract this job generates against. A job always uses
+   * real, server-derived masks; a retry points at a newly derived version with a
+   * tighter expansion radius rather than mutating the original.
+   */
+  maskContractId: string;
   maskContractVersion: string;
   createdAt: string;
   updatedAt: string;

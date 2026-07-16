@@ -1,5 +1,4 @@
 "use client";
-import type { MaskSummary } from "../domain/masks";
 import type { SessionView } from "../dto";
 import type { StylistVerdict } from "../domain/types";
 
@@ -20,10 +19,19 @@ async function req<T>(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
+    // Content-Type is decided per request, never globally: a FormData body must
+    // set its own multipart boundary, and forcing application/json on it would
+    // corrupt the upload.
+    const headers = new Headers(init?.headers);
+    if (init?.body !== undefined && !(init.body instanceof FormData)) {
+      if (!headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+    }
     res = await fetch(url, {
       ...init,
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -84,31 +92,56 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
+  /**
+   * Upload the capture as multipart/form-data: raw image bytes plus the region
+   * map derived from that same image. No base64, no JSON image transport.
+   * The server decides the real format/dimensions and derives mask coverage.
+   */
   uploadSource: (
     id: string,
     input: {
-      dataUrl: string;
-      width: number;
-      height: number;
+      blob: Blob;
+      regionMap: { width: number; height: number; data: Uint8Array };
       preflight: {
         faceCount: number;
         passed: boolean;
         engine: "mediapipe" | "heuristic";
       };
     },
-  ) =>
-    req<{ sourceImageId: string; sourceUrl: string; expiresAt?: string }>(
+  ) => {
+    const form = new FormData();
+    const ext = input.blob.type === "image/png" ? "png" : "jpg";
+    form.append("image", input.blob, `capture.${ext}`);
+    form.append(
+      "regionMap",
+      new Blob([new Uint8Array(input.regionMap.data)], {
+        type: "application/octet-stream",
+      }),
+      "region-map.bin",
+    );
+    form.append("regionMapWidth", String(input.regionMap.width));
+    form.append("regionMapHeight", String(input.regionMap.height));
+    form.append("preflight", JSON.stringify(input.preflight));
+    return req<{
+      sourceImageId: string;
+      maskContractId: string;
+      sourceUrl: string;
+      width: number;
+      height: number;
+      expiresAt?: string;
+    }>(
       `/api/sessions/${id}/source`,
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: form },
       UPLOAD_TIMEOUT_MS, // carries image bytes
-    ),
+    );
+  },
 
   createJob: (
     id: string,
     input: {
       styleId: string;
       candidateCount: number;
-      maskSummary: MaskSummary;
+      maskContractId: string;
     },
   ) =>
     req<{ jobId: string; status: string }>(`/api/sessions/${id}/jobs`, {

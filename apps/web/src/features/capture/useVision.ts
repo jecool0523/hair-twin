@@ -1,10 +1,9 @@
 "use client";
 import { useCallback, useEffect, useRef } from "react";
 import type { PreflightResult } from "@/lib/domain/types";
-import type { MaskSummary } from "@/lib/domain/masks";
+import type { RegionMap } from "@/lib/domain/masks";
 import { runPreflight } from "@/lib/media/preflight";
 import { segment } from "@/lib/media/segmentation";
-import { buildMaskSet, summariseMaskSet } from "@/lib/domain/masks";
 
 /**
  * Manages the two vision Web Workers (face-landmark + segmentation) and exposes
@@ -58,33 +57,39 @@ export function useVision() {
     [],
   );
 
-  const buildMasks = useCallback(
+  /**
+   * Produce the region map for the captured photo. This is what gets uploaded;
+   * the server derives the mask set + authoritative coverage from it. We do not
+   * compute a summary here, because a client-asserted summary would not be
+   * trusted anyway (ADR-0006).
+   */
+  const buildRegionMap = useCallback(
     (image: {
       width: number;
       height: number;
       data: Uint8ClampedArray;
-    }): Promise<MaskSummary> => {
+    }): Promise<RegionMap> => {
       const worker = segRef.current;
-      if (!worker) {
-        const region = segment(image);
-        const set = buildMaskSet(region, 6);
-        return Promise.resolve(summariseMaskSet(set, 6));
-      }
+      if (!worker) return Promise.resolve(segment(image));
       return new Promise((resolve) => {
         const onMsg = (ev: MessageEvent) => {
           if (ev.data?.type === "segment:result") {
             worker.removeEventListener("message", onMsg);
-            resolve(ev.data.summary as MaskSummary);
+            resolve({
+              width: ev.data.width as number,
+              height: ev.data.height as number,
+              data: new Uint8Array(ev.data.data as ArrayBuffer),
+            });
           }
         };
         worker.addEventListener("message", onMsg);
-        worker.postMessage({ type: "segment", image, expansionRadius: 6 });
+        worker.postMessage({ type: "segment", image });
       });
     },
     [],
   );
 
-  return { preflight, buildMasks };
+  return { preflight, buildRegionMap };
 }
 
 /** Extract RGBA ImageData from an image element or video frame via a canvas. */

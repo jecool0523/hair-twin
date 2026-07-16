@@ -5,18 +5,29 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { PreflightResult } from "@/lib/domain/types";
-import type { MaskSummary } from "@/lib/domain/masks";
+import type { RegionMap } from "@/lib/domain/masks";
 import { useVision, extractImageData } from "./useVision";
 
+/**
+ * What capture hands to the console. The photo travels as raw Blob bytes (sent
+ * as multipart), never as a base64 data URL in JSON. `previewUrl` is a local
+ * object URL for on-screen display only and is never uploaded.
+ */
 export interface CapturePayload {
-  dataUrl: string;
-  width: number;
-  height: number;
+  blob: Blob;
+  previewUrl: string;
   preflight: PreflightResult;
-  maskSummary: MaskSummary;
+  regionMap: RegionMap;
 }
 
 type CameraState = "idle" | "requesting" | "streaming" | "denied" | "unsupported";
+
+/**
+ * Client-side pre-checks. These exist to fail fast with a friendly message —
+ * the server re-validates the real bytes regardless (lib/media/image-probe.ts).
+ */
+const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 export function CapturePanel({
   onConfirm,
@@ -30,7 +41,8 @@ export function CapturePanel({
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [captured, setCaptured] = useState<CapturePayload | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const { preflight, buildMasks } = useVision();
+  const [localError, setLocalError] = useState<string | null>(null);
+  const { preflight, buildRegionMap } = useVision();
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -59,24 +71,27 @@ export function CapturePanel({
   useEffect(() => () => stopCamera(), [stopCamera]);
 
   const analyzeAndSet = useCallback(
-    async (
-      source: HTMLVideoElement | HTMLImageElement,
-      dataUrl: string,
-      width: number,
-      height: number,
-    ) => {
+    async (source: HTMLImageElement, blob: Blob, previewUrl: string) => {
       setAnalyzing(true);
+      setLocalError(null);
       try {
         const img = extractImageData(source);
-        if (!img) return;
+        if (!img) {
+          setLocalError("이미지를 읽지 못했습니다. 다른 파일을 사용해 주세요.");
+          URL.revokeObjectURL(previewUrl);
+          return;
+        }
         const pre = await preflight(img);
-        const masks = await buildMasks(img);
-        setCaptured({ dataUrl, width, height, preflight: pre, maskSummary: masks });
+        const regionMap = await buildRegionMap(img);
+        setCaptured((prev) => {
+          if (prev) URL.revokeObjectURL(prev.previewUrl);
+          return { blob, previewUrl, preflight: pre, regionMap };
+        });
       } finally {
         setAnalyzing(false);
       }
     },
-    [preflight, buildMasks],
+    [preflight, buildRegionMap],
   );
 
   const captureFromVideo = useCallback(async () => {
@@ -91,29 +106,53 @@ export function CapturePanel({
     ctx.translate(canvas.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+    // toBlob keeps the frame as bytes; there is no base64 round-trip.
+    const blob = await new Promise<Blob | null>((r) =>
+      canvas.toBlob(r, "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      setLocalError("촬영에 실패했습니다. 다시 시도해 주세요.");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(blob);
     const imgEl = new Image();
-    imgEl.onload = () =>
-      analyzeAndSet(imgEl, dataUrl, canvas.width, canvas.height);
-    imgEl.src = dataUrl;
+    imgEl.onload = () => void analyzeAndSet(imgEl, blob, previewUrl);
+    imgEl.src = previewUrl;
   }, [analyzeAndSet]);
 
   const onFile = useCallback(
     (file: File) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = String(reader.result);
-        const imgEl = new Image();
-        imgEl.onload = () =>
-          analyzeAndSet(imgEl, dataUrl, imgEl.naturalWidth, imgEl.naturalHeight);
-        imgEl.src = dataUrl;
+      setLocalError(null);
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        setLocalError("PNG, JPEG, WebP 이미지만 업로드할 수 있습니다.");
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setLocalError(
+          `이미지가 너무 큽니다. ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)}MB 이하로 다시 시도해 주세요.`,
+        );
+        return;
+      }
+      // The File is already bytes; read it as an object URL, not base64.
+      const previewUrl = URL.createObjectURL(file);
+      const imgEl = new Image();
+      imgEl.onerror = () => {
+        setLocalError("이미지를 열 수 없습니다. 다른 파일을 사용해 주세요.");
+        URL.revokeObjectURL(previewUrl);
       };
-      reader.readAsDataURL(file);
+      imgEl.onload = () => void analyzeAndSet(imgEl, file, previewUrl);
+      imgEl.src = previewUrl;
     },
     [analyzeAndSet],
   );
 
-  const reset = () => setCaptured(null);
+  const reset = () => {
+    setCaptured((prev) => {
+      if (prev) URL.revokeObjectURL(prev.previewUrl);
+      return null;
+    });
+    setLocalError(null);
+  };
 
   return (
     <Card>
@@ -123,6 +162,12 @@ export function CapturePanel({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {localError && (
+          <div className="flex items-start gap-2 rounded-md border border-[hsl(var(--danger))]/30 bg-[hsl(var(--danger))]/5 p-3 text-sm text-[hsl(var(--danger))]">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{localError}</span>
+          </div>
+        )}
         {!captured && (
           <div className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-black/90">
             <video
@@ -178,7 +223,7 @@ export function CapturePanel({
             <div className="relative aspect-[3/4] w-full overflow-hidden rounded-lg bg-black/90">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={captured.dataUrl}
+                src={captured.previewUrl}
                 alt="촬영 미리보기"
                 className="h-full w-full object-cover"
               />

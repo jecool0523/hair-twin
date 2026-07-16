@@ -15,6 +15,7 @@ import type {
 } from "../domain/types";
 import type {
   HairTwinStore,
+  MaskContractRecord,
   MediaToken,
   StoredAsset,
 } from "./types";
@@ -25,6 +26,7 @@ export class InMemoryStore implements HairTwinStore {
   private sources = new Map<string, SourceImageRef>();
   private jobs = new Map<string, GenerationJob>();
   private candidates = new Map<string, GeneratedCandidate>();
+  private masks = new Map<string, MaskContractRecord>();
   private tokens = new Map<string, MediaToken>();
   private audit: AuditEvent[] = [];
 
@@ -103,6 +105,19 @@ export class InMemoryStore implements HairTwinStore {
     return [...this.candidates.values()].filter((c) => c.jobId === jobId);
   }
 
+  async putMaskContract(c: MaskContractRecord) {
+    this.masks.set(c.id, c);
+    return c;
+  }
+  async getMaskContract(id: string) {
+    return this.masks.get(id);
+  }
+  async listMaskContractsForSource(sourceImageId: string) {
+    return [...this.masks.values()]
+      .filter((m) => m.sourceImageId === sourceImageId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.attempt - a.attempt);
+  }
+
   async issueMediaToken(assetId: string, ttlMs: number) {
     const token = randomBytes(24).toString("base64url");
     const t: MediaToken = {
@@ -142,6 +157,17 @@ export class InMemoryStore implements HairTwinStore {
     for (const [id, s] of this.sources) {
       if (!s.saved && s.expiresAt && new Date(s.expiresAt).getTime() < ts) {
         this.sources.delete(id);
+      }
+    }
+    // Mask contracts are as sensitive as the source photo: sweep them too, and
+    // drop the record once its bytes are gone so nothing dangles.
+    for (const [id, m] of this.masks) {
+      if (!m.saved && m.expiresAt && new Date(m.expiresAt).getTime() < ts) {
+        for (const assetId of Object.values(m.maskAssetIds)) {
+          if (this.assets.delete(assetId)) removed++;
+        }
+        if (this.assets.delete(m.regionMapAssetId)) removed++;
+        this.masks.delete(id);
       }
     }
     for (const [token, t] of this.tokens) {
