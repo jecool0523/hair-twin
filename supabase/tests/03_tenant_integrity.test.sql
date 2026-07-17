@@ -30,6 +30,15 @@ values
    'aaaaaaaa-2222-2222-2222-222222222222',
    'aaaaaaaa-1111-1111-1111-111111111111/s/a.png', 'image/png', 600, 800, now() + interval '1 day');
 
+-- A real salon A mask contract. Jobs and masks must reference one (20260716103000),
+-- so the cross-tenant assertions below now exercise the contract FK for real.
+insert into public.mask_contracts
+  (id, salon_id, session_id, source_image_id, attempt, expansion_radius, width, height, expires_at)
+values
+  ('cccccccc-aaaa-0000-0000-000000000001', 'aaaaaaaa-1111-1111-1111-111111111111',
+   'aaaaaaaa-2222-2222-2222-222222222222', 'aaaaaaaa-3333-3333-3333-333333333333',
+   1, 6, 48, 64, now() + interval '1 day');
+
 -- ---------------------------------------------------------------------------
 -- Cross-tenant parent references are structurally rejected.
 -- ---------------------------------------------------------------------------
@@ -46,11 +55,11 @@ select throws_ok(
 
 select throws_ok(
   $$insert into public.generation_jobs
-      (salon_id, session_id, source_image_id, style_id)
+      (salon_id, session_id, source_image_id, style_id, mask_contract_id)
     values ('bbbbbbbb-1111-1111-1111-111111111111',
             'bbbbbbbb-2222-2222-2222-222222222222',
             'aaaaaaaa-3333-3333-3333-333333333333',
-            'layered-c-curl')$$,
+            'layered-c-curl','cccccccc-aaaa-0000-0000-000000000001')$$,
   '23503',
   null,
   'a job cannot pair salon B session with salon A source image'
@@ -61,11 +70,11 @@ select throws_ok(
 -- be dropped and every other assertion here would still pass.
 select throws_ok(
   $$insert into public.generation_jobs
-      (salon_id, session_id, source_image_id, style_id)
+      (salon_id, session_id, source_image_id, style_id, mask_contract_id)
     values ('aaaaaaaa-1111-1111-1111-111111111111',
             'bbbbbbbb-2222-2222-2222-222222222222',
             'aaaaaaaa-3333-3333-3333-333333333333',
-            'layered-c-curl')$$,
+            'layered-c-curl','cccccccc-aaaa-0000-0000-000000000001')$$,
   '23503',
   null,
   'a salon A job cannot attach to a salon B session'
@@ -82,8 +91,9 @@ select throws_ok(
 
 select throws_ok(
   $$insert into public.mask_assets
-      (salon_id, session_id, source_image_id, kind, storage_path, width, height, expires_at)
-    values ('bbbbbbbb-1111-1111-1111-111111111111',
+      (mask_contract_id, salon_id, session_id, source_image_id, kind, storage_path, width, height, expires_at)
+    values ('cccccccc-aaaa-0000-0000-000000000001',
+            'bbbbbbbb-1111-1111-1111-111111111111',
             'bbbbbbbb-2222-2222-2222-222222222222',
             'aaaaaaaa-3333-3333-3333-333333333333',
             'hair_edit', 'b/m.png', 10, 10, now() + interval '1 day')$$,
@@ -107,19 +117,20 @@ select throws_ok(
 -- ---------------------------------------------------------------------------
 select lives_ok(
   $$insert into public.generation_jobs
-      (id, salon_id, session_id, source_image_id, style_id)
+      (id, salon_id, session_id, source_image_id, style_id, mask_contract_id)
     values ('aaaaaaaa-4444-4444-4444-444444444444',
             'aaaaaaaa-1111-1111-1111-111111111111',
             'aaaaaaaa-2222-2222-2222-222222222222',
             'aaaaaaaa-3333-3333-3333-333333333333',
-            'layered-c-curl')$$,
+            'layered-c-curl','cccccccc-aaaa-0000-0000-000000000001')$$,
   'a job within one salon is accepted'
 );
 
 select lives_ok(
   $$insert into public.mask_assets
-      (salon_id, session_id, source_image_id, kind, storage_path, width, height, expires_at)
-    values ('aaaaaaaa-1111-1111-1111-111111111111',
+      (mask_contract_id, salon_id, session_id, source_image_id, kind, storage_path, width, height, expires_at)
+    values ('cccccccc-aaaa-0000-0000-000000000001',
+            'aaaaaaaa-1111-1111-1111-111111111111',
             'aaaaaaaa-2222-2222-2222-222222222222',
             'aaaaaaaa-3333-3333-3333-333333333333',
             'hair_edit', 'a/m.png', 600, 800, now() + interval '1 day')$$,
