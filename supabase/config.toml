@@ -30,10 +30,14 @@ enabled = true
 site_url = "http://localhost:3100"
 additional_redirect_urls = ["http://localhost:3100"]
 jwt_expiry = 3600
-enable_signup = true
+# Invite-only (ADR-0007). Hair Twin has no consumer surface: users exist only
+# because a salon owner/admin invited them. An open sign-up against a database of
+# customer face photos buys nothing and risks everything. The hosted project's
+# Auth settings must match this.
+enable_signup = false
 
 [auth.email]
-enable_signup = true
+enable_signup = false
 enable_confirmations = false
 
 [storage]

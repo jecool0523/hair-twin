@@ -160,11 +160,14 @@ export class MockHairProvider implements HairGenerationProvider {
     const editCoverage = request.masks.coverage.hair_edit;
     const expansion = request.masks.expansionRadius;
 
-    // Prove the adapter can reach real mask bytes: a real provider posts these
-    // to an image-edit endpoint. The mock only measures them.
+    // Prove the adapter can reach the real mask bytes. These are raw grids, so
+    // the mock only measures them; a real provider would have to convert them
+    // to a provider-ready image first (ADR-0006).
     let hairEditMaskBytes = 0;
     if (assets) {
-      const bytes = await assets.loadMask(request.masks.assetIds.hair_edit);
+      const bytes = await assets.loadRawMaskGrid(
+        request.masks.assetIds.hair_edit,
+      );
       hairEditMaskBytes = bytes?.length ?? 0;
     }
 

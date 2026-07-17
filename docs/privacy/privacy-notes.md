@@ -32,10 +32,39 @@ as architecture (system-design §9), not just copy.
 - **Masks and region maps are sensitive.** They describe the customer's hairline
   and face region, so they are stored privately with the same expiry as the
   source photo and swept together with it.
-- **Retention actually deletes.** `POST /api/maintenance/retention-sweep`
-  (shared-secret authenticated, schedule-triggered) removes unsaved expired
-  source images, masks, region maps, and candidates. An `expires_at` alone is a
-  promise; this is the implementation. Verified by tests.
+## Retention — exactly what is and is not wired
+
+An `expires_at` is a promise; deletion is the implementation. Here is the honest
+split, because "retention is done" would be a dangerous thing to believe:
+
+**Done:**
+
+- `POST /api/maintenance/retention-sweep` — an authenticated, MANUAL sweep.
+  Shared-secret (`RETENTION_SWEEP_TOKEN`); refuses to run if unset rather than
+  defaulting to open. Verified over HTTP (401 / 401 / 200) and by tests proving
+  it deletes expired media, spares saved media, and spares unexpired media.
+- Deletion of unsaved expired source images, masks, region maps, and candidates
+  **from the in-memory store**.
+- DB-level guarantees that unsaved rows cannot exist without an expiry
+  (`*_unsaved_must_expire` checks, verified in pgTAP).
+
+**NOT done — do not claim otherwise:**
+
+- **No scheduler.** Nothing calls the endpoint on a timer. Vercel Cron /
+  Supabase pg_cron is not configured. Today retention only happens if a human
+  or an external caller triggers it.
+- **No remote deletion.** SupabaseStore does not exist, so nothing deletes rows
+  from Postgres or objects from Storage buckets. The sweep currently only
+  clears process memory.
+- **No audit event for sweeps.** Runs are not recorded in `audit_events`, so
+  there is currently no evidence trail proving retention ran — which a privacy
+  review will ask for.
+- **No verification that storage objects and DB rows are deleted together**,
+  since neither is wired yet.
+
+Consequence: the retention *promise in the consent copy* is not yet operationally
+met in any deployed environment. It is met in local/dev. Closing this requires
+SupabaseStore + a scheduler + sweep audit events, and should be a launch gate.
 
 ## Face embeddings and QC intermediates — storage decision
 

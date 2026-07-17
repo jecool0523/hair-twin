@@ -107,13 +107,12 @@ jobs:
       - name: Start local Supabase
         run: supabase start
 
-      # Applies supabase/migrations in order and runs seed.sql. This is the same
-      # command that will be used against staging, so a migration that cannot
-      # apply from scratch fails the PR here rather than in staging.
-      - name: Apply migrations from scratch
-        run: supabase db reset --no-seed
-
-      - name: Apply dev seed
+      # One reset, not two: `db reset` drops the DB, replays supabase/migrations
+      # in order against an EMPTY database, then applies seed.sql. That already
+      # covers both things we care about (migrations apply from scratch; the seed
+      # is valid), and its output identifies which step failed. The previous
+      # `--no-seed` + `reset` pair reset twice for no extra signal.
+      - name: Apply migrations from scratch + seed
         run: supabase db reset
 
       - name: pgTAP (supabase test db)

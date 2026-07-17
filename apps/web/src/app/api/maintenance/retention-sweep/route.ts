@@ -6,14 +6,17 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Retention sweep — the ACTUAL deletion path for expired media.
+ * Retention sweep — deletes unsaved media whose expiry has passed.
  *
- * Recording an `expires_at` is a promise, not a deletion. This endpoint keeps
- * that promise: it removes unsaved source images, masks, region maps, and
- * candidates whose expiry has passed, and records an audit event.
+ * SCOPE, precisely (see docs/privacy/privacy-notes.md):
+ *   DONE     manual, authenticated invocation; deletes from the active store.
+ *   NOT DONE no scheduler is attached — nothing calls this on a timer yet.
+ *   NOT DONE no remote deletion; SupabaseStore does not exist, so this only
+ *            clears the in-memory store today.
+ *   NOT DONE the sweep itself is not written to audit_events.
  *
- * Trigger it on a schedule (Vercel Cron / Supabase pg_cron / any scheduler).
- * It is authenticated with a shared secret so it cannot be invoked or probed
+ * Once a scheduler exists, point it here (Vercel Cron / Supabase pg_cron).
+ * Authenticated with a shared secret so it cannot be invoked or probed
  * anonymously:
  *
  *   Authorization: Bearer $RETENTION_SWEEP_TOKEN

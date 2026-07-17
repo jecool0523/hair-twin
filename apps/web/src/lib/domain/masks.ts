@@ -210,8 +210,9 @@ export function buildMaskSet(region: RegionMap, expansionRadius = 6): MaskSet {
 
 /**
  * A compact, serialisable summary of a mask set to ship to the generation job.
- * Full mask PNGs are only needed by the real AI worker; the mock flow and QC
- * only need these ratios (design §11 hair-coverage metric).
+ * Masks are persisted as raw byte-per-cell grids at this grid resolution. A
+ * provider-ready image mask (resized to the source, PNG-encoded, alpha polarity
+ * decided) is a conversion nobody performs yet -- see ADR-0006.
  */
 export interface MaskSummary {
   version: string;

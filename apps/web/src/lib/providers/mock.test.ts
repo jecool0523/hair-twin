@@ -8,7 +8,7 @@ import type { HairGenerationRequest, ProviderAssetLoader } from "./adapter";
 /** Stand-in private storage: the adapter reaches mask bytes by reference. */
 const loader: ProviderAssetLoader = {
   loadSource: async () => Buffer.alloc(16),
-  loadMask: async () => Buffer.alloc(64),
+  loadRawMaskGrid: async () => Buffer.alloc(64),
 };
 
 function req(count: number): HairGenerationRequest {

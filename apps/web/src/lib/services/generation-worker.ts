@@ -120,7 +120,8 @@ export async function processJob(
 
     const assets: ProviderAssetLoader = {
       loadSource: (assetId) => store.getAsset(assetId).then((a) => a?.bytes),
-      loadMask: (assetId) => store.getAsset(assetId).then((a) => a?.bytes),
+      loadRawMaskGrid: (assetId) =>
+        store.getAsset(assetId).then((a) => a?.bytes),
     };
 
     const result = await provider.generate(

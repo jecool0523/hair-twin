@@ -43,20 +43,27 @@ export class OpenAIHairProvider implements HairGenerationProvider {
       });
     }
 
-    // The real hair-edit mask is already reachable through the same adapter
-    // contract the mock uses — this is exactly what /v1/images/edits needs as
-    // its `mask` part, so wiring the call is a fill-in, not a redesign:
+    // The hair-edit mask is reachable through the adapter, but it is a RAW GRID
+    // and CANNOT be posted to /v1/images/edits as-is. Do not be tempted:
     //
-    //   const mask = await assets.loadMask(request.masks.assetIds.hair_edit);
-    //   form.append("image", new Blob([source]), "source.png");
-    //   form.append("mask", new Blob([mask]), "hair-edit-mask.png");
-    //   form.append("prompt", request.prompt.positive);
+    //   * It is `application/octet-stream`, one byte per cell — not a PNG.
+    //   * It is at the segmentation resolution (request.masks.width/height,
+    //     ~48x64), while the API requires a mask the same size as the source
+    //     (request.sourceWidth/Height, e.g. 480x640).
+    //   * Our convention is 1 = "edit here". OpenAI reads TRANSPARENT pixels as
+    //     the editable area, so the polarity has to be decided and inverted
+    //     deliberately, not assumed.
     //
-    // Still deliberately unwired: a real call needs the provider data-processing
-    // review (customer faces leaving the country — ADR-0006 privacy boundary)
-    // and CV-based QualitySignals, which belong in the Python worker.
-    const maskBytes = await assets.loadMask(request.masks.assetIds.hair_edit);
-    if (!maskBytes) {
+    // A `toProviderMask()` conversion (resize -> alpha polarity -> PNG encode)
+    // must exist before this call can be written. ADR-0006 carries the checklist
+    // it has to satisfy. That work is intentionally not done here: it belongs
+    // with the Python worker alongside real CV QualitySignals, and it must not
+    // ship before the offshore-transfer privacy review (customer faces leaving
+    // Korea) is signed off.
+    const rawMaskGrid = await assets.loadRawMaskGrid(
+      request.masks.assetIds.hair_edit,
+    );
+    if (!rawMaskGrid) {
       throw new ProviderError({
         message: "hair_edit mask bytes missing",
         retryable: false,

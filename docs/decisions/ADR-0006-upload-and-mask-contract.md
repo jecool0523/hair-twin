@@ -60,9 +60,9 @@ expiring assets. Coverage is whatever that derivation produced.
 - **Retry re-derives a new contract version** from the same real region map with
   a tighter expansion radius. Tuning shows up as genuinely smaller masks; the
   prior version survives for auditability.
-- **Providers get real mask references** plus a loader, so the OpenAI path can
-  post the `hair_edit` mask to `/v1/images/edits` as-is. The mock uses the same
-  contract, so swapping providers still changes nothing else.
+- **Providers get real mask references** plus a loader. The mock uses the same
+  contract, so swapping providers changes nothing else. Note what those
+  references actually are — see "Raw masks are not provider-ready" below.
 
 ### Trust boundary (read this before "hardening" it)
 
@@ -79,6 +79,42 @@ When the Python worker takes over segmentation, `lib/services/masks.ts` keeps it
 shape — the region map simply arrives from the worker instead of the browser,
 and the client-trust question disappears entirely. That is the real fix; this is
 the honest interim.
+
+## Raw masks are not provider-ready (corrected 2026-07-16)
+
+Earlier comments in this repo claimed the adapter could hand the `hair_edit`
+mask to an image-editing API directly. **That was wrong**, and the code has been
+corrected. What we persist is a *raw mask grid*:
+
+| | Stored today | What an image-edit API needs |
+| --- | --- | --- |
+| Encoding | `application/octet-stream`, 1 byte per cell | PNG |
+| Resolution | segmentation grid (`masks.width/height`, ~48×64) | same size as the source (e.g. 480×640) |
+| Polarity | `1` = edit here | OpenAI: **transparent** = edit here |
+
+The loader is therefore named `loadRawMaskGrid`, not `loadMask`, so the
+interface cannot be misread.
+
+### `toProviderMask()` — checklist for whoever wires a real provider
+
+This conversion does not exist yet. It must:
+
+1. **Resize** the grid to the exact source dimensions. Nearest-neighbour, not
+   bilinear — an interpolated mask edge invents half-edit pixels along the
+   hairline, which is precisely where identity damage happens.
+2. **Decide alpha polarity explicitly** and assert it in a test. Inverting this
+   by accident edits the *face* and protects the *hair* — a silent, maximally
+   harmful failure that still returns a plausible-looking image.
+3. **PNG-encode** with a real alpha channel (RGBA, not palette).
+4. **Verify dimensions match the source exactly** before sending; reject rather
+   than let the provider silently letterbox or stretch.
+5. **Round-trip test** the encoder: decode its own output and confirm the edit
+   region matches the source grid within a stated tolerance.
+6. Keep the raw grid as the stored artefact; the provider-ready PNG is derived
+   and disposable, so a polarity fix does not require re-capturing customers.
+
+Until (1)-(5) exist and the offshore-transfer review is signed off, the OpenAI
+adapter stays unwired and raises rather than sending anything.
 
 ## Consequences
 

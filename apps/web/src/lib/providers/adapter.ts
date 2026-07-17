@@ -11,16 +11,26 @@ import type { MaskName } from "../domain/masks";
 /**
  * The real mask contract handed to a provider.
  *
- * `assetIds` are references into private storage — a real provider (or the
- * Python worker) resolves them to bytes via `loadMask`, so an OpenAI-style
- * `images/edits` call can post the hair_edit mask PNG directly. Nothing here is
- * client-asserted: `coverage` was derived server-side from the region map.
+ * IMPORTANT — these are RAW MASK GRIDS, not provider-ready images.
+ *
+ * Each asset is an uncompressed byte-per-cell grid (`application/octet-stream`)
+ * at the SEGMENTATION resolution given by `width`/`height` — typically ~48x64 —
+ * which is NOT the source photo's resolution. They cannot be handed to an
+ * image-editing API as-is. Converting a raw grid into a provider-ready mask
+ * (resize to the source, decide alpha polarity, PNG-encode) is a separate step
+ * that no code performs yet; see ADR-0006 for the checklist that step must
+ * satisfy.
+ *
+ * Nothing here is client-asserted: `coverage` was derived server-side from the
+ * region map (ADR-0006).
  */
 export interface MaskContractRef {
   contractId: string;
   version: string;
   attempt: number;
+  /** Cells the hair mask may grow into. Retries shrink this. */
   expansionRadius: number;
+  /** Mask GRID size — deliberately not the source image size. */
   width: number;
   height: number;
   /** Private-store asset id per mask name (hair_edit, face_protect, …). */
@@ -94,9 +104,15 @@ export class ProviderError extends Error {
  * Supabase bucket.
  */
 export interface ProviderAssetLoader {
+  /** The source photo bytes, in its real format (PNG/JPEG/WebP). */
   loadSource(assetId: string): Promise<Buffer | undefined>;
-  /** Resolve one mask of the job's contract to its raw bytes. */
-  loadMask(assetId: string): Promise<Buffer | undefined>;
+  /**
+   * One mask of the job's contract, as a RAW byte-per-cell grid at the
+   * segmentation resolution -- NOT a PNG and NOT at source resolution. Named
+   * for what it returns: a provider needing an image mask must convert it
+   * first (ADR-0006).
+   */
+  loadRawMaskGrid(assetId: string): Promise<Buffer | undefined>;
 }
 
 export interface HairGenerationProvider {
