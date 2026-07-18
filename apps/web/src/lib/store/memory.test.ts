@@ -27,7 +27,7 @@ describe("InMemoryStore retention", () => {
     await store.putAsset(asset("fresh", future, false));
 
     const removed = await store.sweepExpired();
-    expect(removed).toBe(1);
+    expect(removed.removedAssets).toBe(1);
     expect(await store.getAsset("expired")).toBeUndefined();
     expect(await store.getAsset("saved")).toBeDefined();
     expect(await store.getAsset("fresh")).toBeDefined();
@@ -38,7 +38,7 @@ describe("InMemoryStore retention", () => {
     await store.putAsset(asset("a", new Date(Date.now() - 1).toISOString()));
     await store.markAssetSaved("a", true);
     const removed = await store.sweepExpired();
-    expect(removed).toBe(0);
+    expect(removed.removedAssets).toBe(0);
     expect(await store.getAsset("a")).toBeDefined();
   });
 

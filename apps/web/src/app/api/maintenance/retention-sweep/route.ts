@@ -13,7 +13,9 @@ export const dynamic = "force-dynamic";
  *   NOT DONE no scheduler is attached — nothing calls this on a timer yet.
  *   NOT DONE no remote deletion; SupabaseStore does not exist, so this only
  *            clears the in-memory store today.
- *   NOT DONE the sweep itself is not written to audit_events.
+ *   PARTIAL  tombstoned contracts emit mask_contract_purged audit events
+ *            (in-memory store only — nothing reaches a real audit_events
+ *            table until SupabaseStore exists).
  *
  * Once a scheduler exists, point it here (Vercel Cron / Supabase pg_cron).
  * Authenticated with a shared secret so it cannot be invoked or probed

@@ -159,21 +159,36 @@ export class InMemoryStore implements HairTwinStore {
         this.sources.delete(id);
       }
     }
-    // Mask contracts are as sensitive as the source photo: sweep them too, and
-    // drop the record once its bytes are gone so nothing dangles.
+    // Mask contracts are as sensitive as the source photo. On expiry the BYTES
+    // always die; whether the record dies depends on whether a job still points
+    // at it (auditability): unreferenced -> delete outright; referenced ->
+    // tombstone with purgedAt so the job can prove which contract it used.
+    let deletedContracts = 0;
+    const purgedContracts: Array<{ id: string; sessionId: string }> = [];
     for (const [id, m] of this.masks) {
+      if (m.purgedAt) continue; // already a tombstone; nothing left to destroy
       if (!m.saved && m.expiresAt && new Date(m.expiresAt).getTime() < ts) {
         for (const assetId of Object.values(m.maskAssetIds)) {
           if (this.assets.delete(assetId)) removed++;
         }
         if (this.assets.delete(m.regionMapAssetId)) removed++;
-        this.masks.delete(id);
+
+        const referencedByJob = [...this.jobs.values()].some(
+          (j) => j.maskContractId === id,
+        );
+        if (referencedByJob) {
+          this.masks.set(id, { ...m, purgedAt: now.toISOString() });
+          purgedContracts.push({ id, sessionId: m.sessionId });
+        } else {
+          this.masks.delete(id);
+          deletedContracts++;
+        }
       }
     }
     for (const [token, t] of this.tokens) {
       if (new Date(t.expiresAt).getTime() < ts) this.tokens.delete(token);
     }
-    return removed;
+    return { removedAssets: removed, deletedContracts, purgedContracts };
   }
 }
 

@@ -272,6 +272,7 @@ export type AuditAction =
   | "result_saved"
   | "result_discarded"
   | "source_expired"
+  | "mask_contract_purged"
   | "report_created";
 
 export interface AuditEvent {

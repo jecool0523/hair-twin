@@ -66,6 +66,23 @@ export interface MaskContractRecord {
   createdAt: string;
   expiresAt?: string;
   saved: boolean;
+  /**
+   * Set when retention destroyed this contract's mask bytes while a generation
+   * job still referenced it. The record survives as a minimal tombstone (ids,
+   * dimensions, coverage numbers) so the job can prove which contract it used;
+   * the sensitive material is gone and nothing may generate against it again.
+   */
+  purgedAt?: string;
+}
+
+/** What one retention sweep actually did (feeds the sweep audit events). */
+export interface SweepResult {
+  /** Byte-carrying assets deleted (sources, masks, region maps, candidates). */
+  removedAssets: number;
+  /** Contracts fully deleted (no job referenced them). */
+  deletedContracts: number;
+  /** Contracts tombstoned because a job still references them. */
+  purgedContracts: Array<{ id: string; sessionId: string }>;
 }
 
 export interface HairTwinStore {
@@ -119,6 +136,10 @@ export interface HairTwinStore {
   appendAudit(event: AuditEvent): Promise<void>;
   listAudit(sessionId: string): Promise<AuditEvent[]>;
 
-  // retention sweep: delete unsaved, expired assets. Returns count removed.
-  sweepExpired(now?: Date): Promise<number>;
+  /**
+   * Retention sweep: delete unsaved, expired assets. Expired mask contracts
+   * still referenced by a job are TOMBSTONED (bytes destroyed, record kept with
+   * purgedAt) rather than deleted — see SweepResult.
+   */
+  sweepExpired(now?: Date): Promise<SweepResult>;
 }

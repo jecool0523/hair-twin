@@ -212,6 +212,15 @@ export async function loadMaskContractForJob(opts: {
       `mask contract ${contract.id} belongs to session=${contract.sessionId} source=${contract.sourceImageId}`,
     );
   }
+  // A purged contract is a tombstone: its mask bytes were destroyed by
+  // retention. Generating against it would mean generating against masks that
+  // no longer exist — fail clearly instead.
+  if (contract.purgedAt) {
+    throw new MaskRejected(
+      "촬영 분석 데이터가 보존 기간 만료로 파기되었습니다. 다시 촬영해 주세요.",
+      `mask contract ${contract.id} was purged at ${contract.purgedAt}`,
+    );
+  }
   if (
     !contract.saved &&
     contract.expiresAt &&
@@ -236,6 +245,13 @@ export async function deriveRetryContract(
   attempt: number,
 ): Promise<MaskContractRecord> {
   const store = getStore();
+  // The region map died with the purge; there is nothing to re-derive from.
+  if (previous.purgedAt) {
+    throw new MaskRejected(
+      "촬영 분석 데이터가 보존 기간 만료로 파기되어 재시도할 수 없습니다. 다시 촬영해 주세요.",
+      `mask contract ${previous.id} was purged at ${previous.purgedAt}`,
+    );
+  }
   const regionAsset = await store.getAsset(previous.regionMapAssetId);
   if (!regionAsset) {
     throw new MaskRejected(

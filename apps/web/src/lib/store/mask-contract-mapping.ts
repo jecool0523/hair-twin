@@ -44,6 +44,7 @@ export interface MaskContractRow {
   height: number;
   saved: boolean;
   expires_at: string | null;
+  purged_at: string | null;
   created_at: string;
 }
 
@@ -99,6 +100,7 @@ export function toRows(
     height: record.height,
     saved: record.saved,
     expires_at: record.expiresAt ?? null,
+    purged_at: record.purgedAt ?? null,
     created_at: record.createdAt,
   };
 
@@ -182,5 +184,6 @@ export function fromRows(rows: MaskContractRows): MaskContractRecord {
   // expiresAt is optional on the aggregate and nullable in the DB; only set it
   // when present so a round-trip does not turn `undefined` into `null`.
   if (contract.expires_at !== null) record.expiresAt = contract.expires_at;
+  if (contract.purged_at !== null) record.purgedAt = contract.purged_at;
   return record;
 }

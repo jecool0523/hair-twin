@@ -45,6 +45,13 @@ split, because "retention is done" would be a dangerous thing to believe:
   it deletes expired media, spares saved media, and spares unexpired media.
 - Deletion of unsaved expired source images, masks, region maps, and candidates
   **from the in-memory store**.
+- **Tombstone rule for job-referenced masks** (migration 20260718103000): on
+  expiry the mask BYTES always die; a contract still referenced by a generation
+  job keeps a minimal `purged_at` record (ids, dimensions, coverage numbers) so
+  the job can prove which contract it used. Purged contracts refuse new masks,
+  new jobs, retries, and loading — enforced by DB triggers and in the app.
+- **Sweep audit events (in-memory scope)**: each tombstoned contract emits a
+  `mask_contract_purged` audit event on its session, once.
 - DB-level guarantees that unsaved rows cannot exist without an expiry
   (`*_unsaved_must_expire` checks, verified in pgTAP).
 
@@ -56,9 +63,10 @@ split, because "retention is done" would be a dangerous thing to believe:
 - **No remote deletion.** SupabaseStore does not exist, so nothing deletes rows
   from Postgres or objects from Storage buckets. The sweep currently only
   clears process memory.
-- **No audit event for sweeps.** Runs are not recorded in `audit_events`, so
-  there is currently no evidence trail proving retention ran — which a privacy
-  review will ask for.
+- **Sweep audit coverage is partial.** `mask_contract_purged` events are
+  emitted for tombstoned contracts, but only into the in-memory store; nothing
+  lands in the real `audit_events` table until SupabaseStore exists, and
+  plain asset deletions are still not individually audited.
 - **No verification that storage objects and DB rows are deleted together**,
   since neither is wired yet.
 

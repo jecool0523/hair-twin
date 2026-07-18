@@ -17,6 +17,7 @@ import {
 } from "./consultation";
 import { processJob } from "./generation-worker";
 import {
+  deriveRetryContract,
   loadMaskContractForJob,
   parseRegionMap,
   persistMaskContract,
@@ -246,6 +247,39 @@ describe("parseRegionMap", () => {
 
   it("rejects implausible grid dimensions", () => {
     expect(() => parseRegionMap(new Uint8Array(4), 2, 2)).toThrow(MaskRejected);
+  });
+});
+
+describe("purged contracts fail clearly", () => {
+  it("load and retry both refuse a purged contract with a clear reason", async () => {
+    const s = await consentedSession();
+    const up = await storeSourceImage(s.id, captureInput());
+    const store = getStore();
+    const contract = (await store.getMaskContract(up!.maskContractId))!;
+
+    // Simulate the sweep's tombstone move.
+    await store.putMaskContract({
+      ...contract,
+      purgedAt: new Date().toISOString(),
+    });
+
+    // Generation loading refuses: the masks no longer exist.
+    await expect(
+      loadMaskContractForJob({
+        contractId: up!.maskContractId,
+        sessionId: s.id,
+        sourceImageId: up!.ref.id,
+      }),
+    ).rejects.toMatchObject({
+      userMessageKo: expect.stringMatching(/파기/),
+    });
+
+    // Retry refuses too — silently regenerating against missing masks is the
+    // failure mode this exists to prevent.
+    const purged = (await store.getMaskContract(up!.maskContractId))!;
+    await expect(deriveRetryContract(purged, 4, 2)).rejects.toMatchObject({
+      userMessageKo: expect.stringMatching(/파기.*재시도|재시도.*파기/),
+    });
   });
 });
 

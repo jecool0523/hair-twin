@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { getStore } from "../store";
 import { runRetentionSweep } from "./retention";
 import {
+  createGenerationJob,
   recordConsent,
   startSession,
   storeSourceImage,
@@ -72,5 +73,48 @@ describe("runRetentionSweep", () => {
     const store = getStore();
     await runRetentionSweep(new Date()); // now
     expect(await store.getAsset(up.ref.id)).toBeDefined();
+  });
+
+  it("tombstones a job-referenced contract instead of deleting it, and audits", async () => {
+    const { session, up } = await capture(false);
+    const store = getStore();
+    const job = await createGenerationJob(session.id, {
+      styleId: "layered-c-curl",
+      candidateCount: 1,
+      maskContractId: up.maskContractId,
+    });
+    expect(job).toBeDefined();
+
+    const contract = (await store.getMaskContract(up.maskContractId))!;
+    const maskAssetId = contract.maskAssetIds.hair_edit!;
+
+    const later = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const result = await runRetentionSweep(later);
+
+    // The bytes are gone...
+    expect(await store.getAsset(maskAssetId)).toBeUndefined();
+    expect(await store.getAsset(contract.regionMapAssetId)).toBeUndefined();
+    // ...but the contract survives as a tombstone, because the job needs it.
+    const tomb = await store.getMaskContract(up.maskContractId);
+    expect(tomb).toBeDefined();
+    expect(tomb!.purgedAt).toBeTruthy();
+    expect(result.purgedContracts).toBe(1);
+
+    // The audit contract: retention leaves evidence it ran, per session.
+    const events = await store.listAudit(session.id);
+    const purgeEvent = events.find((e) => e.action === "mask_contract_purged");
+    expect(purgeEvent).toBeDefined();
+    expect(purgeEvent!.detail).toMatchObject({
+      maskContractId: up.maskContractId,
+    });
+
+    // A second sweep does not re-purge or re-audit the same tombstone.
+    const again = await runRetentionSweep(later);
+    expect(again.purgedContracts).toBe(0);
+    expect(
+      (await store.listAudit(session.id)).filter(
+        (e) => e.action === "mask_contract_purged",
+      ),
+    ).toHaveLength(1);
   });
 });
