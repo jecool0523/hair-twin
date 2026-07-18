@@ -226,6 +226,22 @@ select throws_ok(
   'a contract cannot claim salon B while pointing at salon A session/source'
 );
 
+-- The same-salon variant, which the two independent salon-scoped FKs missed:
+-- session A2 paired with session A1's source photo. Without
+-- mask_contracts_source_in_session (20260718100000) this INSERT SUCCEEDED,
+-- cross-linking customer A1's face into customer A2's consultation.
+select throws_ok(
+  $$insert into public.mask_contracts
+      (salon_id, session_id, source_image_id, attempt, expansion_radius, width, height, expires_at)
+    values ('aaaaaaaa-1111-1111-1111-111111111111',
+            'aaaaaaaa-2222-2222-2222-999999999999',
+            'aaaaaaaa-3333-3333-3333-333333333333',
+            5, 6, 48, 64, now() + interval '1 day')$$,
+  '23503',
+  null,
+  'within one salon, a contract cannot pair session A2 with session A1''s source'
+);
+
 -- ---------------------------------------------------------------------------
 -- 8. Retention: unsaved contracts and masks must carry an expiry.
 -- ---------------------------------------------------------------------------
