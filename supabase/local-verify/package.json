@@ -6,7 +6,8 @@
   "description": "Offline pgTAP runner for the Hair Twin schema (PGlite stand-in for the Docker-based local Supabase stack).",
   "scripts": {
     "pgtap:fetch": "node fetch-pgtap.mjs",
-    "test": "node run-tests.mjs"
+    "test": "node run-tests.mjs",
+    "self-test": "node self-test.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4"

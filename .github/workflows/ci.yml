@@ -85,6 +85,13 @@ jobs:
         working-directory: supabase/local-verify
         run: npm run pgtap:fetch
 
+      # The harness itself is under test: it must fail on TAP plan mismatches,
+      # bail-outs, and failing assertions (it once reported green through a
+      # plan mismatch). Run its regression fixtures before trusting its verdict.
+      - name: Runner self-test
+        working-directory: supabase/local-verify
+        run: npm run self-test
+
       # Fast feedback only. The Docker job below is the authoritative DB gate:
       # PGlite runs Postgres alone, behind a hand-written Supabase shim.
       - name: pgTAP on PGlite
