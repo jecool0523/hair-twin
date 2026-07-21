@@ -159,12 +159,16 @@ select lives_ok(
             '11111111-0000-0000-0000-000000000001', now() + interval '7 days')$$,
   'after revocation, the same email can be invited again'
 );
--- 15/16: terms immutable; outcomes one-way — even for managers.
+-- 15/16: managers cannot rewrite terms, and outcomes are one-way.
+-- Since the revoke-only column grant (20260718110000), a manager updating any
+-- column but revoked_at is refused at the PRIVILEGE level (42501) — stronger
+-- than, and ahead of, the immutability trigger. The trigger's own 23001 for
+-- privileged paths is exercised in 11_invite_membership_hardening.
 select throws_ok(
   $$update public.pending_invites set email = 'changed@example.com'
     where id = 'eeeeeeee-0000-0000-0000-000000000002'$$,
-  '23001', null,
-  'invite terms cannot be rewritten'
+  '42501', null,
+  'a manager cannot rewrite invite terms (no column privilege)'
 );
 select throws_ok(
   $$update public.pending_invites set revoked_at = null
