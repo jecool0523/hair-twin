@@ -13,8 +13,8 @@ import { persistMaskContract } from "../services/masks";
 import { recordConsent, startSession, storeSourceImage } from "../services/consultation";
 import { CONSENT_WORDING_VERSION } from "../config";
 import { getStore } from ".";
-import { captureInput, regionMap } from "@/test/fixtures";
-import type { MaskContractRecord } from "./types";
+import { asActive, captureInput, regionMap } from "@/test/fixtures";
+import type { ActiveMaskContract, PurgedMaskContract } from "./types";
 
 const SALON = "aaaaaaaa-1111-1111-1111-111111111111";
 
@@ -22,7 +22,7 @@ beforeAll(() => {
   process.env.HAIR_TWIN_STORE = "memory";
 });
 
-async function realContract(): Promise<MaskContractRecord> {
+async function realContract(): Promise<ActiveMaskContract> {
   const s = await startSession({ stylistName: "t", customerAlias: "c" });
   await recordConsent(s.id, {
     captureConsented: true,
@@ -31,7 +31,7 @@ async function realContract(): Promise<MaskContractRecord> {
     wordingVersion: CONSENT_WORDING_VERSION,
   });
   const up = await storeSourceImage(s.id, captureInput({ hairRows: 0.31 }));
-  return (await getStore().getMaskContract(up!.maskContractId))!;
+  return asActive(await getStore().getMaskContract(up!.maskContractId));
 }
 
 describe("MaskContractRecord <-> DB rows", () => {
@@ -44,7 +44,7 @@ describe("MaskContractRecord <-> DB rows", () => {
 
   it("preserves derived coverage floats exactly (not rounded)", async () => {
     const original = await realContract();
-    const restored = fromRows(toRows(original, SALON));
+    const restored = asActive(fromRows(toRows(original, SALON)));
 
     // Real coverage values are ratios like 0.147222222222222…, which a
     // numeric(6,5) column would silently truncate. The schema uses double
@@ -120,9 +120,9 @@ describe("MaskContractRecord <-> DB rows", () => {
     expect(rows.contract.expires_at).toBe(original.expiresAt);
 
     // A saved contract has no expiry, and null must not become "null".
-    const saved: MaskContractRecord = { ...original, saved: true };
+    const saved: ActiveMaskContract = { ...original, saved: true };
     delete saved.expiresAt;
-    const restored = fromRows(toRows(saved, SALON));
+    const restored = asActive(fromRows(toRows(saved, SALON)));
     expect(restored.expiresAt).toBeUndefined();
     expect("expiresAt" in restored).toBe(false);
     expect(restored).toEqual(saved);
@@ -154,6 +154,47 @@ describe("MaskContractRecord <-> DB rows", () => {
     rows.assets = rows.assets.filter((a) => a.kind !== "region_map");
     // Better to fail loudly than to return a contract that cannot be retried.
     expect(() => fromRows(rows)).toThrow(/region_map/);
+  });
+
+  it("reverse-maps a purged tombstone from a contract row with NO mask assets", async () => {
+    const original = await realContract();
+
+    // What retention leaves in the DB: the contract row with purged_at set and
+    // every mask_asset row deleted. The mapper must reconstruct the tombstone
+    // from this alone — the DB is the authoritative contract.
+    const rows = toRows(original, SALON);
+    const tombstoneRows = {
+      contract: {
+        ...rows.contract,
+        purged_at: "2026-07-18T00:00:00.000Z",
+        // A real purge also nulls these on the row; the mapper must not rely on
+        // them for a tombstone.
+        saved: false,
+        expires_at: null,
+      },
+      assets: [], // bytes destroyed — no rows at all
+    };
+
+    const restored = fromRows(tombstoneRows);
+    expect(restored.status).toBe("purged");
+    const purged = restored as PurgedMaskContract;
+    expect(purged.purgedAt).toBe("2026-07-18T00:00:00.000Z");
+    // The reconstructed tombstone carries no sensitive material...
+    expect("coverage" in purged).toBe(false);
+    expect("maskAssetIds" in purged).toBe(false);
+    expect("regionMapAssetId" in purged).toBe(false);
+    // ...but keeps the identity a job needs to prove which contract it used.
+    expect(purged.id).toBe(original.id);
+    expect(purged.sessionId).toBe(original.sessionId);
+    expect(purged.sourceImageId).toBe(original.sourceImageId);
+    expect(purged.attempt).toBe(original.attempt);
+
+    // And a tombstone maps back OUT to a contract row with zero asset rows, so a
+    // round-trip cannot resurrect deleted material.
+    const backOut = toRows(purged, SALON);
+    expect(backOut.assets).toHaveLength(0);
+    expect(backOut.contract.purged_at).toBe("2026-07-18T00:00:00.000Z");
+    expect(fromRows(backOut)).toEqual(purged);
   });
 
   it("survives a retry contract (attempt 2) unchanged", async () => {

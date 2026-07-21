@@ -42,14 +42,22 @@ export interface MediaToken {
 }
 
 /**
- * A persisted mask contract: the server-derived mask set for one source image.
+ * A persisted mask contract, modelled as a discriminated union on `status` so
+ * the type system — not a runtime `if` — decides which fields exist.
  *
- * Coverage here is AUTHORITATIVE — it is computed on the server from the actual
- * region-map bytes via buildMaskSet(), never taken from a client-supplied
- * number. A generation job references one of these by id; retries create a new
- * version with a tighter expansion radius rather than mutating this one.
+ * `active`: the server-derived mask set for one source image. Coverage is
+ * AUTHORITATIVE — computed on the server from the actual region-map bytes via
+ * buildMaskSet(), never a client-supplied number. A job references one of these
+ * by id; retries create a new version with a tighter expansion radius.
+ *
+ * `purged`: a tombstone. Retention destroyed this contract's mask bytes while a
+ * job still referenced it. The record survives ONLY so the job can prove which
+ * contract it used. It therefore does NOT carry `coverage`, `maskAssetIds`, or
+ * `regionMapAssetId` — those describe material that no longer exists, and the
+ * DB row has no `mask_assets` to reconstruct them from. Trying to read them is
+ * a compile error, which is the point.
  */
-export interface MaskContractRecord {
+export interface CommonMaskContractFields {
   id: string;
   sessionId: string;
   sourceImageId: string;
@@ -58,22 +66,27 @@ export interface MaskContractRecord {
   expansionRadius: number;
   width: number;
   height: number;
+  createdAt: string;
+}
+
+export interface ActiveMaskContract extends CommonMaskContractFields {
+  status: "active";
   /** Derived server-side from the mask bytes. */
   coverage: Record<string, number>;
   /** assetId per mask name; bytes live in the private store. */
   maskAssetIds: Record<string, string>;
   regionMapAssetId: string;
-  createdAt: string;
   expiresAt?: string;
   saved: boolean;
-  /**
-   * Set when retention destroyed this contract's mask bytes while a generation
-   * job still referenced it. The record survives as a minimal tombstone (ids,
-   * dimensions, coverage numbers) so the job can prove which contract it used;
-   * the sensitive material is gone and nothing may generate against it again.
-   */
-  purgedAt?: string;
 }
+
+export interface PurgedMaskContract extends CommonMaskContractFields {
+  status: "purged";
+  /** When retention destroyed the mask bytes. One-way. */
+  purgedAt: string;
+}
+
+export type MaskContractRecord = ActiveMaskContract | PurgedMaskContract;
 
 /** What one retention sweep actually did (feeds the sweep audit events). */
 export interface SweepResult {

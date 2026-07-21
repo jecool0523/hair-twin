@@ -47,8 +47,9 @@ split, because "retention is done" would be a dangerous thing to believe:
   **from the in-memory store**.
 - **Tombstone rule for job-referenced masks** (migration 20260718103000): on
   expiry the mask BYTES always die; a contract still referenced by a generation
-  job keeps a minimal `purged_at` record (ids, dimensions, coverage numbers) so
-  the job can prove which contract it used. Purged contracts refuse new masks,
+  job keeps a minimal `purged_at` tombstone (ids, dimensions, attempt — NO
+  coverage, maskAssetIds, or regionMapAssetId; that material is gone) so the job
+  can prove which contract it used. Purged contracts refuse new masks,
   new jobs, retries, and loading — enforced by DB triggers and in the app.
 - **Sweep audit events (in-memory scope)**: each tombstoned contract emits a
   `mask_contract_purged` audit event on its session, once.

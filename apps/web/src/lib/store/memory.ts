@@ -16,6 +16,7 @@ import type {
 import type {
   HairTwinStore,
   MaskContractRecord,
+  PurgedMaskContract,
   MediaToken,
   StoredAsset,
 } from "./types";
@@ -166,7 +167,7 @@ export class InMemoryStore implements HairTwinStore {
     let deletedContracts = 0;
     const purgedContracts: Array<{ id: string; sessionId: string }> = [];
     for (const [id, m] of this.masks) {
-      if (m.purgedAt) continue; // already a tombstone; nothing left to destroy
+      if (m.status === "purged") continue; // already a tombstone; bytes long gone
       if (!m.saved && m.expiresAt && new Date(m.expiresAt).getTime() < ts) {
         for (const assetId of Object.values(m.maskAssetIds)) {
           if (this.assets.delete(assetId)) removed++;
@@ -177,7 +178,24 @@ export class InMemoryStore implements HairTwinStore {
           (j) => j.maskContractId === id,
         );
         if (referencedByJob) {
-          this.masks.set(id, { ...m, purgedAt: now.toISOString() });
+          // Collapse to the PURGED variant: the tombstone must NOT carry
+          // coverage, maskAssetIds, or regionMapAssetId — that material is gone.
+          // Only the common fields survive, so the job can prove which contract
+          // it used.
+          const tombstone: PurgedMaskContract = {
+            status: "purged",
+            id: m.id,
+            sessionId: m.sessionId,
+            sourceImageId: m.sourceImageId,
+            version: m.version,
+            attempt: m.attempt,
+            expansionRadius: m.expansionRadius,
+            width: m.width,
+            height: m.height,
+            createdAt: m.createdAt,
+            purgedAt: now.toISOString(),
+          };
+          this.masks.set(id, tombstone);
           purgedContracts.push({ id, sessionId: m.sessionId });
         } else {
           this.masks.delete(id);

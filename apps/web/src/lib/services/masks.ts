@@ -26,7 +26,7 @@ import {
 } from "../domain/masks";
 import { RETENTION } from "../config";
 import { getStore, newId } from "../store";
-import type { MaskContractRecord } from "../store/types";
+import type { ActiveMaskContract } from "../store/types";
 
 export class MaskRejected extends Error {
   userMessageKo: string;
@@ -120,7 +120,7 @@ export interface PersistMaskContractInput {
  */
 export async function persistMaskContract(
   input: PersistMaskContractInput,
-): Promise<MaskContractRecord> {
+): Promise<ActiveMaskContract> {
   const store = getStore();
   const now = new Date();
   const expiresAt = new Date(
@@ -163,7 +163,8 @@ export async function persistMaskContract(
     saved: false,
   });
 
-  const record: MaskContractRecord = {
+  const record: ActiveMaskContract = {
+    status: "active",
     id: newId("maskc"),
     sessionId: input.sessionId,
     sourceImageId: input.sourceImageId,
@@ -179,7 +180,7 @@ export async function persistMaskContract(
     expiresAt,
     saved: false,
   };
-  return store.putMaskContract(record);
+  return (await store.putMaskContract(record)) as ActiveMaskContract;
 }
 
 /**
@@ -191,7 +192,7 @@ export async function loadMaskContractForJob(opts: {
   sessionId: string;
   sourceImageId: string;
   now?: Date;
-}): Promise<MaskContractRecord> {
+}): Promise<ActiveMaskContract> {
   const store = getStore();
   const now = opts.now ?? new Date();
   const contract = await store.getMaskContract(opts.contractId);
@@ -214,8 +215,9 @@ export async function loadMaskContractForJob(opts: {
   }
   // A purged contract is a tombstone: its mask bytes were destroyed by
   // retention. Generating against it would mean generating against masks that
-  // no longer exist — fail clearly instead.
-  if (contract.purgedAt) {
+  // no longer exist — fail clearly instead. This also narrows the union to
+  // ActiveMaskContract for every caller below.
+  if (contract.status === "purged") {
     throw new MaskRejected(
       "촬영 분석 데이터가 보존 기간 만료로 파기되었습니다. 다시 촬영해 주세요.",
       `mask contract ${contract.id} was purged at ${contract.purgedAt}`,
@@ -240,18 +242,11 @@ export async function loadMaskContractForJob(opts: {
  * the smaller edit region is genuinely derived, not asserted.
  */
 export async function deriveRetryContract(
-  previous: MaskContractRecord,
+  previous: ActiveMaskContract,
   expansionRadius: number,
   attempt: number,
-): Promise<MaskContractRecord> {
+): Promise<ActiveMaskContract> {
   const store = getStore();
-  // The region map died with the purge; there is nothing to re-derive from.
-  if (previous.purgedAt) {
-    throw new MaskRejected(
-      "촬영 분석 데이터가 보존 기간 만료로 파기되어 재시도할 수 없습니다. 다시 촬영해 주세요.",
-      `mask contract ${previous.id} was purged at ${previous.purgedAt}`,
-    );
-  }
   const regionAsset = await store.getAsset(previous.regionMapAssetId);
   if (!regionAsset) {
     throw new MaskRejected(

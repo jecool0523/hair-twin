@@ -7,6 +7,25 @@
  */
 import { RegionClass, type RegionMap } from "@/lib/domain/masks";
 import { encodePng } from "@/lib/media/png";
+import type {
+  ActiveMaskContract,
+  MaskContractRecord,
+} from "@/lib/store/types";
+
+/**
+ * Narrow a contract to its active variant, or fail the test loudly. Used where a
+ * test has just persisted a contract and knows it must be active — makes the
+ * intent explicit instead of scattering `as ActiveMaskContract` casts.
+ */
+export function asActive(
+  c: MaskContractRecord | undefined,
+): ActiveMaskContract {
+  if (!c) throw new Error("expected a mask contract, got undefined");
+  if (c.status !== "active") {
+    throw new Error(`expected an active mask contract, got status=${c.status}`);
+  }
+  return c;
+}
 
 /** A valid PNG of the given size (>= the prober's minimum). */
 export function pngBytes(width = 480, height = 640): Uint8Array {

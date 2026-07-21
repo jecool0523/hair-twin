@@ -12,7 +12,7 @@ import {
   storeSourceImage,
 } from "./consultation";
 import { CONSENT_WORDING_VERSION } from "../config";
-import { captureInput } from "@/test/fixtures";
+import { asActive, captureInput } from "@/test/fixtures";
 
 beforeAll(() => {
   process.env.HAIR_TWIN_STORE = "memory";
@@ -34,9 +34,9 @@ describe("runRetentionSweep", () => {
   it("deletes the source photo, its masks and region map once expired", async () => {
     const { up } = await capture(false);
     const store = getStore();
-    const contract = await store.getMaskContract(up.maskContractId);
-    const maskId = contract!.maskAssetIds.hair_edit!;
-    const regionId = contract!.regionMapAssetId;
+    const contract = asActive(await store.getMaskContract(up.maskContractId));
+    const maskId = contract.maskAssetIds.hair_edit!;
+    const regionId = contract.regionMapAssetId;
 
     // Everything is present and carries an expiry (never open-ended).
     expect(await store.getAsset(up.ref.id)).toBeDefined();
@@ -85,7 +85,7 @@ describe("runRetentionSweep", () => {
     });
     expect(job).toBeDefined();
 
-    const contract = (await store.getMaskContract(up.maskContractId))!;
+    const contract = asActive(await store.getMaskContract(up.maskContractId));
     const maskAssetId = contract.maskAssetIds.hair_edit!;
 
     const later = new Date(Date.now() + 72 * 60 * 60 * 1000);
@@ -97,7 +97,12 @@ describe("runRetentionSweep", () => {
     // ...but the contract survives as a tombstone, because the job needs it.
     const tomb = await store.getMaskContract(up.maskContractId);
     expect(tomb).toBeDefined();
-    expect(tomb!.purgedAt).toBeTruthy();
+    expect(tomb!.status).toBe("purged");
+    // The tombstone carries NONE of the sensitive fields anymore.
+    expect("coverage" in tomb!).toBe(false);
+    expect("maskAssetIds" in tomb!).toBe(false);
+    expect("regionMapAssetId" in tomb!).toBe(false);
+    if (tomb!.status === "purged") expect(tomb!.purgedAt).toBeTruthy();
     expect(result.purgedContracts).toBe(1);
 
     // The audit contract: retention leaves evidence it ran, per session.

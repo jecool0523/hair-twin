@@ -21,12 +21,23 @@
  *     DB the direction is inverted — each mask row points at its contract. The
  *     region map is simply the row whose kind is 'region_map'.
  *
+ * A PURGED contract (tombstone) is a first-class case, not a degraded active
+ * one: the DB row has `purged_at` set and NO `mask_assets` rows at all (bytes
+ * destroyed by retention). `fromRows` reconstructs it WITHOUT requiring any mask
+ * asset — the DB is the authoritative contract, and it says a tombstone has no
+ * coverage/maskAssetIds/regionMapAssetId. `toRows` emits zero asset rows for a
+ * tombstone, so a round-trip cannot resurrect deleted material.
+ *
  * `salonId` is NOT on MaskContractRecord today (the in-memory store is
  * single-tenant dev scaffolding), so it is supplied to `toRows` explicitly. When
  * Auth lands, it comes from the authenticated membership — never from a client.
  */
 import type { MaskName } from "../domain/masks";
-import type { MaskContractRecord } from "./types";
+import type {
+  ActiveMaskContract,
+  MaskContractRecord,
+  PurgedMaskContract,
+} from "./types";
 
 /** Mask kinds as stored in the DB enum: the 7 masks plus the region map. */
 export type MaskKind = MaskName | "region_map";
@@ -98,11 +109,20 @@ export function toRows(
     expansion_radius: record.expansionRadius,
     width: record.width,
     height: record.height,
-    saved: record.saved,
-    expires_at: record.expiresAt ?? null,
-    purged_at: record.purgedAt ?? null,
+    // A purged tombstone is never "saved" and its expiry is moot; the DB row
+    // keeps the columns, but the aggregate no longer carries them.
+    saved: record.status === "active" ? record.saved : false,
+    expires_at: record.status === "active" ? (record.expiresAt ?? null) : null,
+    purged_at: record.status === "purged" ? record.purgedAt : null,
     created_at: record.createdAt,
   };
+
+  // A tombstone has no bytes and therefore no asset rows. Emitting any would
+  // both violate the DB's reject-masks-on-purged trigger and pretend the
+  // destroyed material still exists.
+  if (record.status === "purged") {
+    return { contract, assets: [] };
+  }
 
   const common = {
     mask_contract_id: record.id,
@@ -151,10 +171,33 @@ export function toRows(
 export function fromRows(rows: MaskContractRows): MaskContractRecord {
   const { contract, assets } = rows;
 
+  const common = {
+    id: contract.id,
+    sessionId: contract.session_id,
+    sourceImageId: contract.source_image_id,
+    version: contract.version,
+    attempt: contract.attempt,
+    expansionRadius: contract.expansion_radius,
+    width: contract.width,
+    height: contract.height,
+    createdAt: contract.created_at,
+  };
+
+  // The DB is authoritative: purged_at set => tombstone, reconstructed with NO
+  // mask assets. This is exactly the row a retention purge leaves behind.
+  if (contract.purged_at !== null) {
+    const tombstone: PurgedMaskContract = {
+      status: "purged",
+      ...common,
+      purgedAt: contract.purged_at,
+    };
+    return tombstone;
+  }
+
   const regionMap = assets.find((a) => a.kind === "region_map");
   if (!regionMap) {
     throw new Error(
-      `mask contract ${contract.id} has no region_map asset; it cannot be reconstructed`,
+      `active mask contract ${contract.id} has no region_map asset; it cannot be reconstructed`,
     );
   }
 
@@ -166,24 +209,16 @@ export function fromRows(rows: MaskContractRows): MaskContractRecord {
     if (a.coverage !== null) coverage[a.kind] = a.coverage;
   }
 
-  const record: MaskContractRecord = {
-    id: contract.id,
-    sessionId: contract.session_id,
-    sourceImageId: contract.source_image_id,
-    version: contract.version,
-    attempt: contract.attempt,
-    expansionRadius: contract.expansion_radius,
-    width: contract.width,
-    height: contract.height,
+  const record: ActiveMaskContract = {
+    status: "active",
+    ...common,
     coverage,
     maskAssetIds,
     regionMapAssetId: regionMap.id,
-    createdAt: contract.created_at,
     saved: contract.saved,
   };
   // expiresAt is optional on the aggregate and nullable in the DB; only set it
   // when present so a round-trip does not turn `undefined` into `null`.
   if (contract.expires_at !== null) record.expiresAt = contract.expires_at;
-  if (contract.purged_at !== null) record.purgedAt = contract.purged_at;
   return record;
 }

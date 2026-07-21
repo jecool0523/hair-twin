@@ -17,7 +17,6 @@ import {
 } from "./consultation";
 import { processJob } from "./generation-worker";
 import {
-  deriveRetryContract,
   loadMaskContractForJob,
   parseRegionMap,
   persistMaskContract,
@@ -25,7 +24,7 @@ import {
 } from "./masks";
 import { CONSENT_WORDING_VERSION } from "../config";
 import { MockHairProvider } from "../providers/mock";
-import { captureInput, regionMap } from "@/test/fixtures";
+import { asActive, captureInput, regionMap } from "@/test/fixtures";
 import type { HairGenerationRequest } from "../providers/adapter";
 
 beforeAll(() => {
@@ -54,13 +53,13 @@ describe("mask contracts are derived from the real capture", () => {
     const upB = await storeSourceImage(b.id, captureInput({ hairRows: 0.55 }));
 
     const store = getStore();
-    const cA = await store.getMaskContract(upA!.maskContractId);
-    const cB = await store.getMaskContract(upB!.maskContractId);
+    const cA = asActive(await store.getMaskContract(upA!.maskContractId));
+    const cB = asActive(await store.getMaskContract(upB!.maskContractId));
 
     // Coverage is derived, so it must differ between the two captures.
-    expect(cA!.coverage.hair_current).not.toBe(cB!.coverage.hair_current);
-    expect(cA!.coverage.hair_edit).not.toBe(cB!.coverage.hair_edit);
-    expect(cB!.coverage.hair_current!).toBeGreaterThan(cA!.coverage.hair_current!);
+    expect(cA.coverage.hair_current).not.toBe(cB.coverage.hair_current);
+    expect(cA.coverage.hair_edit).not.toBe(cB.coverage.hair_edit);
+    expect(cB.coverage.hair_current!).toBeGreaterThan(cA.coverage.hair_current!);
 
     // ...and the provider receives those distinct contracts, not a constant.
     const seen: HairGenerationRequest[] = [];
@@ -93,8 +92,8 @@ describe("mask contracts are derived from the real capture", () => {
     const forB = seen.find((r) => r.masks.contractId === upB!.maskContractId);
     expect(forA, "provider was called with salon A's contract").toBeDefined();
     expect(forB, "provider was called with salon B's contract").toBeDefined();
-    expect(forA!.masks.coverage.hair_edit).toBe(cA!.coverage.hair_edit);
-    expect(forB!.masks.coverage.hair_edit).toBe(cB!.coverage.hair_edit);
+    expect(forA!.masks.coverage.hair_edit).toBe(cA.coverage.hair_edit);
+    expect(forB!.masks.coverage.hair_edit).toBe(cB.coverage.hair_edit);
     // The whole point: distinct photos => distinct contracts at the provider.
     expect(forA!.masks.coverage.hair_edit).not.toBe(
       forB!.masks.coverage.hair_edit,
@@ -115,16 +114,16 @@ describe("mask contracts are derived from the real capture", () => {
     } as Parameters<typeof storeSourceImage>[1];
 
     const up = await storeSourceImage(s.id, smuggled);
-    const contract = await getStore().getMaskContract(up!.maskContractId);
+    const contract = asActive(await getStore().getMaskContract(up!.maskContractId));
 
     // Derived from the real map, nowhere near the asserted 0.99.
-    expect(contract!.coverage.hair_edit!).toBeLessThan(0.5);
-    expect(contract!.expansionRadius).toBe(6);
+    expect(contract.coverage.hair_edit!).toBeLessThan(0.5);
+    expect(contract.expansionRadius).toBe(6);
 
     // And an independent re-derivation from the same bytes agrees.
     const { buildMaskSet } = await import("../domain/masks");
     const expected = buildMaskSet(regionMap({ hairRows: 0.3 }), 6);
-    expect(contract!.coverage.hair_edit!).toBeCloseTo(
+    expect(contract.coverage.hair_edit!).toBeCloseTo(
       expected.coverage.hair_edit,
       10,
     );
@@ -159,11 +158,11 @@ describe("mask contracts are derived from the real capture", () => {
     const s = await consentedSession();
     const up = await storeSourceImage(s.id, captureInput());
     const store = getStore();
-    const contract = await store.getMaskContract(up!.maskContractId);
+    const contract = asActive(await store.getMaskContract(up!.maskContractId));
 
     // Force the contract past its retention window.
     await store.putMaskContract({
-      ...contract!,
+      ...contract,
       expiresAt: new Date(Date.now() - 1000).toISOString(),
     });
 
@@ -205,14 +204,15 @@ describe("mask contracts are derived from the real capture", () => {
 
     // The job now points at a NEW contract version...
     expect(retried!.maskContractId).not.toBe(up!.maskContractId);
-    const after = await store.getMaskContract(retried!.maskContractId);
-    expect(after!.attempt).toBe(2);
+    const after = asActive(await store.getMaskContract(retried!.maskContractId));
+    const beforeActive = asActive(before);
+    expect(after.attempt).toBe(2);
     // ...with a genuinely tighter expansion ring...
-    expect(after!.expansionRadius).toBeLessThan(before!.expansionRadius);
+    expect(after.expansionRadius).toBeLessThan(beforeActive.expansionRadius);
     // ...producing a smaller real edit region, derived from the same photo.
-    expect(after!.coverage.hair_edit!).toBeLessThan(before!.coverage.hair_edit!);
-    expect(after!.coverage.hair_current!).toBeCloseTo(
-      before!.coverage.hair_current!,
+    expect(after.coverage.hair_edit!).toBeLessThan(beforeActive.coverage.hair_edit!);
+    expect(after.coverage.hair_current!).toBeCloseTo(
+      beforeActive.coverage.hair_current!,
       10,
     );
     // The original version survives for auditability.
@@ -251,55 +251,70 @@ describe("parseRegionMap", () => {
 });
 
 describe("purged contracts fail clearly", () => {
-  it("load and retry both refuse a purged contract with a clear reason", async () => {
+  it("load and job creation both refuse a purged tombstone", async () => {
     const s = await consentedSession();
     const up = await storeSourceImage(s.id, captureInput());
     const store = getStore();
-    const contract = (await store.getMaskContract(up!.maskContractId))!;
+    const active = asActive(await store.getMaskContract(up!.maskContractId));
 
-    // Simulate the sweep's tombstone move.
+    // The tombstone the sweep leaves: PURGED variant, carrying NONE of
+    // coverage/maskAssetIds/regionMapAssetId. Building it by hand this way is
+    // only possible because the type forbids the sensitive fields.
     await store.putMaskContract({
-      ...contract,
+      status: "purged",
+      id: active.id,
+      sessionId: active.sessionId,
+      sourceImageId: active.sourceImageId,
+      version: active.version,
+      attempt: active.attempt,
+      expansionRadius: active.expansionRadius,
+      width: active.width,
+      height: active.height,
+      createdAt: active.createdAt,
       purgedAt: new Date().toISOString(),
     });
 
-    // Generation loading refuses: the masks no longer exist.
+    // Loading for generation refuses: the masks no longer exist.
     await expect(
       loadMaskContractForJob({
         contractId: up!.maskContractId,
         sessionId: s.id,
         sourceImageId: up!.ref.id,
       }),
-    ).rejects.toMatchObject({
-      userMessageKo: expect.stringMatching(/파기/),
-    });
+    ).rejects.toMatchObject({ userMessageKo: expect.stringMatching(/파기/) });
 
-    // Retry refuses too — silently regenerating against missing masks is the
-    // failure mode this exists to prevent.
-    const purged = (await store.getMaskContract(up!.maskContractId))!;
-    await expect(deriveRetryContract(purged, 4, 2)).rejects.toMatchObject({
-      userMessageKo: expect.stringMatching(/파기.*재시도|재시도.*파기/),
-    });
+    // The real retry/generation entry points refuse too — silently
+    // regenerating against missing masks is the failure this prevents.
+    // (deriveRetryContract can no longer even be CALLED with a tombstone: it
+    //  requires ActiveMaskContract, so that path is a compile-time guarantee.)
+    await expect(
+      createGenerationJob(s.id, {
+        styleId: "layered-c-curl",
+        candidateCount: 1,
+        maskContractId: up!.maskContractId,
+      }),
+    ).rejects.toThrow(MaskRejected);
   });
 });
 
 describe("mask retention", () => {
-  it("sweeping expired masks removes their bytes and the contract", async () => {
+  it("sweeping an unreferenced expired contract deletes its bytes and record", async () => {
     const s = await consentedSession();
     const up = await storeSourceImage(s.id, captureInput());
     const store = getStore();
-    const contract = await store.getMaskContract(up!.maskContractId);
-    const maskAssetId = contract!.maskAssetIds.hair_edit!;
+    const contract = asActive(await store.getMaskContract(up!.maskContractId));
+    const maskAssetId = contract.maskAssetIds.hair_edit!;
     expect(await store.getAsset(maskAssetId)).toBeDefined();
 
+    // No job references it, so expiry deletes outright (not tombstone).
     await store.putMaskContract({
-      ...contract!,
+      ...contract,
       expiresAt: new Date(Date.now() - 1000).toISOString(),
     });
     await store.sweepExpired();
 
     expect(await store.getMaskContract(up!.maskContractId)).toBeUndefined();
     expect(await store.getAsset(maskAssetId)).toBeUndefined();
-    expect(await store.getAsset(contract!.regionMapAssetId)).toBeUndefined();
+    expect(await store.getAsset(contract.regionMapAssetId)).toBeUndefined();
   });
 });
