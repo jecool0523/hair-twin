@@ -1,0 +1,134 @@
+name: CI
+
+# PR gate. Everything here runs against local, disposable infrastructure:
+# no remote Supabase project, no staging secrets, nothing that can touch real
+# customer data. See docs/decisions/ADR-0005.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a CLI release cannot silently change what "green" means.
+  SUPABASE_CLI_VERSION: "2.109.1"
+
+jobs:
+  web:
+    name: Web (test, typecheck, lint, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      # `npm ci` installs exactly the lockfile; it fails if package.json and the
+      # lockfile disagree, which is the behaviour we want in CI.
+      - name: Install (locked)
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Unit + integration tests
+        working-directory: apps/web
+        run: npm test
+
+      - name: Typecheck
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Build
+        working-directory: apps/web
+        run: npm run build
+        env:
+          # Build must not depend on any real backend.
+          HAIR_TWIN_STORE: memory
+          HAIR_TWIN_PROVIDER: mock
+
+      # Guard rail: the base64 JSON image path must never come back.
+      - name: Assert no base64 image transport
+        working-directory: apps/web
+        run: |
+          if grep -rn --include=*.ts --include=*.tsx \
+              -e 'dataUrl' -e 'readAsDataURL' -e 'toDataURL' src/ ; then
+            echo "::error::base64 image transport reintroduced (see ADR-0006)"
+            exit 1
+          fi
+          echo "ok: no base64 image transport"
+
+  db-pglite:
+    name: DB (PGlite quick check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          cache: npm
+          cache-dependency-path: supabase/local-verify/package-lock.json
+
+      - name: Install (locked)
+        working-directory: supabase/local-verify
+        run: npm ci
+
+      - name: Vendor pgTAP
+        working-directory: supabase/local-verify
+        run: npm run pgtap:fetch
+
+      # The harness itself is under test: it must fail on TAP plan mismatches,
+      # bail-outs, and failing assertions (it once reported green through a
+      # plan mismatch). Run its regression fixtures before trusting its verdict.
+      - name: Runner self-test
+        working-directory: supabase/local-verify
+        run: npm run self-test
+
+      # Fast feedback only. The Docker job below is the authoritative DB gate:
+      # PGlite runs Postgres alone, behind a hand-written Supabase shim.
+      - name: pgTAP on PGlite
+        working-directory: supabase/local-verify
+        run: npm test
+
+  db-supabase:
+    name: DB (local Supabase stack — authoritative)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Supabase CLI (pinned)
+        uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      # ubuntu-latest ships Docker; `supabase start` boots the real stack
+      # (Postgres + PostgREST + GoTrue + Storage) from supabase/config.toml.
+      - name: Start local Supabase
+        run: supabase start
+
+      # One reset, not two: `db reset` drops the DB, replays supabase/migrations
+      # in order against an EMPTY database, then applies seed.sql. That already
+      # covers both things we care about (migrations apply from scratch; the seed
+      # is valid), and its output identifies which step failed. The previous
+      # `--no-seed` + `reset` pair reset twice for no extra signal.
+      - name: Apply migrations from scratch + seed
+        run: supabase db reset
+
+      - name: pgTAP (supabase test db)
+        run: supabase test db
+
+      - name: Show migration list
+        if: always()
+        run: supabase migration list --local
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup

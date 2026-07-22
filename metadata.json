@@ -1,8 +1,0 @@
-{
-  "name": "Magic Mirror Try-On",
-  "description": "A smart mirror web app that analyzes body proportions and performs virtual clothing try-on using Gemini AI.",
-  "requestFramePermissions": [
-    "camera"
-  ],
-  "majorCapabilities": []
-}

@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Hair Twin design tokens.
+ * Calm, premium salon feel. Neutral warm surfaces, single accent.
+ * PROJECT_PLAN §11: 과장된 필터가 아니라 신뢰감 있는 상담 자료 느낌.
+ */
+:root {
+  --background: 32 20% 97%;
+  --foreground: 24 12% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 24 12% 12%;
+  --primary: 246 60% 55%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 30 12% 92%;
+  --muted-foreground: 24 8% 40%;
+  --border: 28 12% 86%;
+  --input: 28 12% 86%;
+  --ring: 246 60% 55%;
+  --success: 152 55% 38%;
+  --warning: 38 92% 45%;
+  --danger: 356 72% 50%;
+  --radius: 0.75rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 24 14% 8%;
+    --foreground: 30 12% 94%;
+    --card: 24 12% 12%;
+    --card-foreground: 30 12% 94%;
+    --primary: 246 70% 68%;
+    --primary-foreground: 24 20% 10%;
+    --muted: 24 8% 18%;
+    --muted-foreground: 28 8% 65%;
+    --border: 24 8% 22%;
+    --input: 24 8% 22%;
+    --ring: 246 70% 68%;
+    --success: 152 50% 52%;
+    --warning: 38 90% 58%;
+    --danger: 356 75% 62%;
+  }
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
