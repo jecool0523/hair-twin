@@ -16,7 +16,7 @@
 -- assertion; removing the has_salon_role guard breaks the stylist/non-member
 -- cases. Re-run those by hand when this migration changes.
 begin;
-select plan(34);
+select plan(35);
 
 set local role postgres;
 
@@ -85,6 +85,11 @@ select ok(
   not has_function_privilege('service_role',
     'public.create_or_reinvite_salon_invite(uuid,text,public.membership_role)'::regprocedure, 'execute'),
   'service_role cannot execute the create RPC'
+);
+select ok(
+  not has_function_privilege('service_role',
+    'public.revoke_salon_invite(uuid)'::regprocedure, 'execute'),
+  'service_role cannot execute the revoke RPC'
 );
 select ok(
   has_function_privilege('authenticated',

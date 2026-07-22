@@ -35,6 +35,15 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      # Production-dependency security gate. Runs before tests/build so a known
+      # high-severity vulnerability in a SHIPPED dependency fails the PR outright
+      # — no continue-on-error, no advisory allowlist. Scoped to prod deps
+      # (--omit=dev) because build/test-only tooling is not part of the deploy
+      # surface.
+      - name: Audit production dependencies (high+)
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Unit + integration tests
         working-directory: apps/web
         run: npm test
