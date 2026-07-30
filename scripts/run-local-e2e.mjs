@@ -61,7 +61,8 @@ try {
   await admin("/rest/v1/profiles", { method: "POST", body: JSON.stringify({ id: user.id, display_name: "E2E Owner" }) });
   await admin("/rest/v1/salon_memberships", { method: "POST", body: JSON.stringify({ salon_id: salonId, profile_id: user.id, role: "owner" }) });
 
-  server = spawn(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev"], {
+  const nextCli = path.join(root, "apps", "web", "node_modules", "next", "dist", "bin", "next");
+  server = spawn(process.execPath, [nextCli, "dev", "-p", "3100"], {
     cwd: path.join(root, "apps", "web"), env: { ...process.env, HAIR_TWIN_STORE: "supabase", HAIR_TWIN_PROVIDER: "mock" },
     stdio: "ignore", windowsHide: true,
   });
@@ -106,16 +107,29 @@ try {
 
   const create = await json(`/api/sessions/${sessionId}/jobs`, { styleId: "layered-c-curl", candidateCount: 3, maskContractId: captured.maskContractId });
   expectStatus(create, 200, "job creation");
-  const worker = spawnSync(python, ["-c", "from app.main import process_once; assert process_once()"], {
-    cwd: path.join(root, "workers", "ai-worker"), env: { ...process.env, HAIR_TWIN_PROVIDER: "mock", HAIR_TWIN_ALLOW_MOCK: "true" }, encoding: "utf8", windowsHide: true,
+  const workerProgram = [
+    "from app.main import process_once",
+    "processed = 0",
+    "for _ in range(64):",
+    "    if not process_once(): break",
+    "    processed += 1",
+    "assert processed > 0",
+  ].join("\n");
+  const worker = spawnSync(python, ["-c", workerProgram], {
+    cwd: path.join(root, "workers", "ai-worker"),
+    env: { ...process.env, SUPABASE_URL: api, HAIR_TWIN_PROVIDER: "mock", HAIR_TWIN_ALLOW_MOCK: "true" },
+    encoding: "utf8", windowsHide: true,
   });
-  if (worker.status !== 0) throw new Error(`worker process failed (${worker.status})`);
+  if (worker.status !== 0) throw new Error(`worker process failed (${worker.status}): ${worker.stderr.trim()}`);
 
   const viewResponse = await request(`/api/sessions/${sessionId}`);
   expectStatus(viewResponse, 200, "session polling");
   const view = await viewResponse.json();
   const candidate = view.jobs?.[0]?.candidates?.find((item) => item.canApprove);
-  if (!candidate) throw new Error("worker produced no approvable candidate");
+  if (!candidate) {
+    const workerRows = await admin(`/rest/v1/generation_jobs?session_id=eq.${sessionId}&select=status,attempts,failure_reason`);
+    throw new Error(`worker produced no approvable candidate: ${JSON.stringify({ jobs: view.jobs, workerRows })}`);
+  }
   expectStatus(await json(`/api/candidates/${candidate.id}/verdict`, { verdict: "usable" }), 200, "stylist verdict");
   const media = await request(candidate.mediaUrl);
   expectStatus(media, 200, "private media");

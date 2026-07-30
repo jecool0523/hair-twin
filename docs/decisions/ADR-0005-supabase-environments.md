@@ -116,3 +116,25 @@ Tradeoffs / limits:
 
 Until (1)-(3) are answered, the app keeps running on the in-memory store
 (ADR-0003) and this schema stays unapplied.
+
+## Verification update — 2026-07-30
+
+This update supersedes the local-tooling and verification limitations recorded
+above; hosted environment selection remains blocked on the listed product and
+infrastructure decisions.
+
+Docker Desktop and cached Supabase CLI/images became available locally. All
+current migrations, including
+`20260730010000_defensive_integrity_hardening.sql`, were applied to the local
+Supabase PostgreSQL 15 stack. All **17 pgTAP files / 268 assertions** passed.
+
+The real GoTrue/PostgREST/Storage integration test passed with a real user
+session, tenant RLS, public-signup denial, and private binary objects. The full
+local HTTP journey also passed: login, consultation creation, consent,
+multipart source/mask upload, queued Python worker, QC approval, private media,
+save, logout, and post-logout denial.
+
+The PGlite runner remains a fast offline fallback. A reviewed hosted staging
+deployment is still required before launch; no hosted project has been selected
+or modified. Local development may use the in-memory store, while
+production-shaped local and CI verification use the Supabase store.

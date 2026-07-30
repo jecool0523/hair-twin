@@ -4,7 +4,15 @@ export function isSameOriginRequest(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
   try {
-    return new URL(origin).origin === new URL(request.url).origin;
+    const supplied = new URL(origin).origin;
+    const url = new URL(request.url);
+    const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+    const protocol = forwardedProto === "http" || forwardedProto === "https" ? `${forwardedProto}:` : url.protocol;
+    const hosts = [request.headers.get("host"), request.headers.get("x-forwarded-host")?.split(",", 1)[0]?.trim(), url.host];
+    return hosts.some((host) => {
+      if (!host || /[\s\\/]/.test(host)) return false;
+      try { return new URL(`${protocol}//${host}`).origin === supplied; } catch { return false; }
+    });
   } catch {
     return false;
   }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSameOriginRequest } from "@/lib/request-security";
 
 const ACCESS = "hair-twin-access";
 const REFRESH = "hair-twin-refresh";
@@ -18,7 +19,7 @@ function unauthenticated(request: NextRequest) {
 }
 
 export async function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method) && request.headers.get("origin") !== request.nextUrl.origin) {
+  if (request.nextUrl.pathname.startsWith("/api/") && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !isSameOriginRequest(request)) {
     return NextResponse.json({ error: "same-origin request required" }, { status: 403 });
   }
   const storeMode = (process.env.HAIR_TWIN_STORE ?? "memory").toLowerCase();

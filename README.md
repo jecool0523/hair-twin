@@ -55,6 +55,22 @@ Supabase CI job. The authoritative CI job additionally boots Postgres,
 PostgREST, GoTrue, and Storage, resets from an empty database, and runs Auth,
 RLS, private-object, and full HTTP journey tests.
 
+With Docker and the Supabase CLI available, the production-shaped local checks
+are:
+
+```powershell
+supabase start
+supabase db push --local
+supabase test db
+cd apps/web
+npm run test:supabase
+npm run test:e2e:local
+```
+
+The two web commands require the local URL and publishable/secret keys from
+`supabase status`, plus `RUN_SUPABASE_INTEGRATION=1` for `test:supabase` and a
+`PYTHON_EXECUTABLE` for `test:e2e:local`.
+
 Run the production-shaped worker with the Supabase and provider environment
 variables described in `apps/web/.env.example`:
 
