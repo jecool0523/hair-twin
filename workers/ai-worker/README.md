@@ -18,12 +18,18 @@ Implemented controls:
 - deterministic mock provider only when both `HAIR_TWIN_PROVIDER=mock` and
   `HAIR_TWIN_ALLOW_MOCK=true` are explicitly set;
 - OpenAI Images multipart edit transport, bounded retries, and safe errors;
+- explicit model/quality/size selection and a process-wide HTTP-attempt budget;
 - cleanup of uploaded results when database finalization fails;
-- hard blocking of unmeasured external results.
+- a separate CV-scoring contract with hard blocking of unmeasured results;
+- graceful termination plus `/healthz`, `/readyz`, and aggregate `/metrics`;
+- a non-root, hosting-neutral OCI image definition.
 
-The quality status and exposure policy mirror the TypeScript domain. Real
-pixel-based identity, landmark, non-hair, and realism measurement is still a
-production launch gate; vectors and image intermediates must remain in memory.
+The quality status and exposure policy mirror the TypeScript domain. Because no
+CV service/model is approved, `HAIR_TWIN_CV_PROVIDER=fail_closed` is the only
+real-provider staging-safe setting: generated pixels can be stored privately,
+but their QC is a hard failure and they cannot be shown or approved. A future
+scorer must implement `app.quality.scorer.QualityScorer`; vectors and image
+intermediates must remain in memory.
 
 Run tests and the worker:
 
@@ -36,3 +42,8 @@ python -m app.main
 external-transfer gates are required for the production-shaped process.
 Provider responses and decoded mask/source dimensions are bounded before
 allocation; private object paths must match the claimed salon and session.
+
+The worker refuses real-provider startup unless model, quality, size, privacy
+gates, API key, and `OPENAI_IMAGE_MAX_CALLS_PER_PROCESS > 0` are all explicit.
+Retries consume that same call budget. Use `.env.example` only as a variable
+inventory; never commit its filled-in copy.

@@ -11,6 +11,9 @@ class HairGenerationProvider(ABC):
     name: str
     model: str
 
+    def validate_configuration(self) -> None:
+        """Fail before polling when a real provider is not launch-ready."""
+
     @abstractmethod
     def generate(
         self,

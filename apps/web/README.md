@@ -23,10 +23,9 @@ an in-memory store (see `docs/decisions/ADR-0003`).
 - `npm run test` — Vitest (unit + integration)
 - `npm run build` — production build
 
-## Provider swap (no UI change)
+## Provider boundary
 
-```bash
-HAIR_TWIN_PROVIDER=openai OPENAI_API_KEY=sk-... npm run dev
-```
-
-Secrets are read server-side only. See `docs/architecture/overview.md`.
+Real AI generation runs only in the Python worker. It requires an explicit
+provider, model, quality, size, privacy-transfer gates, and a positive call
+budget. No model is selected by default and secret values must remain in the
+approved staging secret store. See `docs/operations/staging-runbook.md`.

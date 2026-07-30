@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.main import process_once, select_provider
 from app.masks.provider_mask import hair_edit_grid_to_png
 from app.providers.mock import MockHairProvider
+from app.schemas import HairGenerationResult, ProviderCandidate
 from app.storage.supabase_db import SupabaseDatabase
 
 
@@ -79,6 +80,18 @@ class FakeStorage:
         self.deleted.append(path)
 
 
+class UnmeasuredRealProvider:
+    name = "real-fixture"
+    model = "approved-fixture"
+
+    def generate(self, request, load_asset_bytes):
+        return HairGenerationResult(
+            self.name,
+            self.model,
+            [ProviderCandidate(load_asset_bytes(request.source_asset_id), request.source_mime, request.seed)],
+        )
+
+
 class WorkerPipelineTest(unittest.TestCase):
     def test_processes_claim_through_qc_and_atomic_finish(self):
         database, storage = FakeDatabase(), FakeStorage()
@@ -97,6 +110,18 @@ class WorkerPipelineTest(unittest.TestCase):
         self.assertTrue(process_once(database, storage, MockHairProvider()))
         self.assertEqual(storage.deleted, [storage.uploaded[0][0]])
         self.assertEqual(database.failed, (True, "RuntimeError"))
+
+    def test_unmeasured_real_candidate_is_persisted_only_as_hard_blocked(self):
+        database, storage = FakeDatabase(), FakeStorage()
+        outcomes = []
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(
+                process_once(database, storage, UnmeasuredRealProvider(), on_outcome=outcomes.append)
+            )
+        quality = database.finished[0]["quality"]
+        self.assertTrue(quality["hard_fail"])
+        self.assertEqual(quality["status"], "blocked_identity_changed")
+        self.assertEqual(outcomes, ["completed"])
 
     def test_provider_must_be_explicit_and_mock_requires_opt_in(self):
         with patch.dict(os.environ, {}, clear=True):

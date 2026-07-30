@@ -77,7 +77,9 @@ class ProviderCandidate:
     image_bytes: bytes
     mime: str
     seed: int
-    signals: QualitySignals
+    # Real providers return pixels, not trustworthy product QC measurements.
+    # A separately configured scorer must populate these before evaluation.
+    signals: QualitySignals | None = None
     raw_provider_metadata: dict = field(default_factory=dict)
 
 

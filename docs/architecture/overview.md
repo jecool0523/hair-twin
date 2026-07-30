@@ -1,62 +1,58 @@
-# Hair Twin — Implementation Architecture (First Slice)
+# Hair Twin implementation architecture
 
-This complements `outputs/cto/architecture/hair-twin-system-design.md` with the
-concrete boundaries built in `apps/web`.
+Hair Twin is an invited-salon, tenant-isolated Next.js application backed by
+Supabase and a separately hosted Python generation worker. The offline memory
+store and mock provider are explicit local/CI fixtures; hosted production-mode
+web requests require `HAIR_TWIN_STORE=supabase`.
 
-## Routes
+## Request and data boundaries
 
-| Route | Purpose |
+```text
+Browser
+  -> Next.js routes (same-origin mutations, authenticated session)
+  -> Supabase Auth/PostgREST/private Storage
+  -> generation_jobs queue
+  -> Python worker service-role RPC claim
+  -> provider adapter -> CV scorer -> quality gate
+  -> private generated object + atomic candidate/QC finish RPC
+  -> stylist review -> explicit usable verdict -> customer exposure
+```
+
+The browser receives only a Supabase publishable key and short-lived media
+tokens. Service-role/provider keys, private object paths, full image bytes,
+masks, prompts, and provider responses remain server/worker-only. Salon roles
+come from `salon_memberships`, never mutable JWT user metadata.
+
+## Authoritative components
+
+| Concern | Implementation |
 | --- | --- |
-| `/` | Starts a consultation and redirects to `/consultation/<id>` (307). Not a landing page. |
-| `/consultation/[id]` | The console. Session identity lives in the URL, so a refresh **resumes** the consultation instead of abandoning it. Initial state is server-rendered. |
-| `/consultation/[id]` (unknown/expired) | `not-found.tsx` — explains the retention sweep and offers a clean restart. |
+| UI and HTTP routes | `apps/web/src/app`, `apps/web/src/features` |
+| Same-origin/auth boundary | `apps/web/src/middleware.ts`, `apps/web/src/lib/request-security.ts` |
+| Supabase store | `apps/web/src/lib/store/supabase.ts` |
+| Domain/QC/exposure policy | `apps/web/src/lib/domain` |
+| Schema, RLS, Storage, RPC ACLs | `supabase/migrations` |
+| Strict database tests | `supabase/tests` |
+| Worker claim/lifecycle | `workers/ai-worker/app/main.py`, `app/storage` |
+| Provider adapter | `workers/ai-worker/app/providers` |
+| CV boundary | `workers/ai-worker/app/quality/scorer.py` |
+| Worker health/readiness | `workers/ai-worker/app/runtime.py` |
 
-No session is created on component mount, so a remount (Fast Refresh, re-render,
-back/forward) cannot orphan sessions server-side.
+All migrations under `supabase/migrations` are ordered, forward-only source of
+truth. The current schema includes membership/invite authority, tenant-bound
+consultations and media, mask contracts, generation lifecycle RPCs, atomic
+result/QC finalization, and retention claim/delete/finalize behavior.
 
-## Trust boundary
+## Exposure and launch gates
 
-```
-Browser (untrusted)                 Server / route handlers (trusted)
-────────────────────                ─────────────────────────────────
-capture + preflight (Web Workers)   validate (zod)  ──►  services
-mask summary (coverage only)        provider adapter (secrets here only)
-media tokens ◄── /api/media         in-process worker simulation
-                                    HairTwinStore (private bytes + expiry)
-                                    audit log
-```
+Automated QC never exposes a candidate by itself. Only `accepted` or
+`needs_stylist_review` can receive an explicit stylist `usable` verdict; hard
+fail and regenerate results remain hidden.
 
-- The browser never receives: provider API keys, service-role keys, image
-  bytes (only short-lived `/api/media/<token>` URLs), or full masks.
-- `server-only` guards the store/provider/services so they cannot be imported
-  into client bundles.
+No real image model or CV service is selected by default. Real image calls need
+explicit provider/model/quality/size, privacy-transfer approval, secret key, and
+a positive HTTP-attempt budget. With no approved CV scorer, the fail-closed
+adapter produces hard-failing measurements for every external result.
 
-## Pipeline (ADR-0002)
-
-```
-capture ─► local preflight ─► segmentation ─► mask contract (hair_edit +
-protected regions) ─► generation job ─► provider adapter ─► candidates ─►
-automated quality gate ─► stylist review ─► save (consent) or discard
-```
-
-## Key modules
-
-| Concern | Module |
-| --- | --- |
-| Domain types | `src/lib/domain/types.ts` |
-| Style presets | `src/lib/domain/style-presets.ts` |
-| Mask contract | `src/lib/domain/masks.ts` |
-| Quality gate | `src/lib/domain/quality.ts` |
-| Customer exposure policy | `src/lib/domain/visibility.ts` (ADR-0004) |
-| Job lifecycle | `src/lib/domain/job.ts` |
-| Provider adapter | `src/lib/providers/adapter.ts` (+ mock/openai/factory) |
-| Store boundary | `src/lib/store/*` |
-| Worker simulation | `src/lib/services/generation-worker.ts` |
-| Capture vision | `src/lib/media/*`, `src/workers/*.worker.ts` |
-| Consultation UI | `src/features/*` |
-
-## Data model
-
-Authoritative schema: `supabase/migrations/0001_init.sql` (+ `0002_storage`).
-RLS on every exposed table; private buckets only. Applied only once a project is
-chosen (ADR-0003).
+See `docs/operations/staging-runbook.md` for environment scope, connection,
+verification, cost, recovery, and production-promotion gates.

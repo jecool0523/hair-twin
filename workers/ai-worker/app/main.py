@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import signal
+import threading
 import time
 import uuid
 
@@ -9,6 +11,8 @@ from app.providers.base import ProviderError
 from app.masks.provider_mask import storage_grid_png_to_bytes
 from app.providers.mock import MockHairProvider
 from app.quality.gate import evaluate
+from app.quality.scorer import QualityScoringInput, select_quality_scorer
+from app.runtime import WorkerRuntimeState, start_health_server
 from app.schemas import GenerationMode, HairGenerationRequest
 from app.storage.supabase_db import DatabaseError, SupabaseDatabase
 from app.storage.supabase_storage import SupabaseStorage
@@ -40,9 +44,8 @@ def _prompt(job: dict) -> tuple[str, str]:
     )
 
 
-def _quality_payload(candidate) -> dict:
-    result = evaluate(candidate.signals)
-    signals = candidate.signals
+def _quality_payload(signals) -> dict:
+    result = evaluate(signals)
     return {
         "status": result.status.value,
         "hard_fail": result.hard_fail,
@@ -60,10 +63,11 @@ def _quality_payload(candidate) -> dict:
     }
 
 
-def process_once(database=None, storage=None, provider=None) -> bool:
+def process_once(database=None, storage=None, provider=None, scorer=None, on_outcome=None) -> bool:
     database = database or SupabaseDatabase()
     storage = storage or SupabaseStorage()
     provider = provider or select_provider()
+    scorer = scorer or select_quality_scorer(provider.name)
     job = database.claim()
     if not job:
         return False
@@ -113,6 +117,19 @@ def process_once(database=None, storage=None, provider=None) -> bool:
             path = f"{prefix}/{job_id}/{uuid.uuid4()}.{extension}"
             storage.put_generated_asset(path, candidate.image_bytes, candidate.mime)
             uploaded.append(path)
+            signals = scorer.score(
+                QualityScoringInput(
+                    source_bytes=source,
+                    candidate_bytes=candidate.image_bytes,
+                    hair_edit_mask_bytes=mask,
+                    source_mime=request.source_mime,
+                    candidate_mime=candidate.mime,
+                    source_width=source_width,
+                    source_height=source_height,
+                    style_id=request.style_id,
+                    provider_signals=candidate.signals,
+                )
+            )
             rows.append(
                 {
                     "storage_path": path,
@@ -121,10 +138,12 @@ def process_once(database=None, storage=None, provider=None) -> bool:
                     "variant_label": f"candidate-{index + 1}",
                     "provider": result.provider,
                     "model": result.model,
-                    "quality": _quality_payload(candidate),
+                    "quality": _quality_payload(signals),
                 }
             )
         database.finish(job_id, rows)
+        if on_outcome:
+            on_outcome("completed")
         return True
     except Exception as error:
         for path in uploaded:
@@ -136,19 +155,60 @@ def process_once(database=None, storage=None, provider=None) -> bool:
             database.fail(job_id, bool(getattr(error, "retryable", True)), type(error).__name__)
         except DatabaseError:
             pass
+        if on_outcome:
+            on_outcome("failed")
         return True
 
 
-def poll_loop(poll_interval_s: float = 2.0) -> None:
+def _bounded_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be numeric") from error
+    if value < minimum or value > maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def poll_loop(poll_interval_s: float | None = None) -> None:
     database = SupabaseDatabase()
     storage = SupabaseStorage()
     if not database.enabled() or not storage.enabled():
         raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY are required")
     provider = select_provider()
-    print(f"[ai-worker] provider={provider.name} ready=true")
-    while True:
-        if not process_once(database, storage, provider):
-            time.sleep(poll_interval_s)
+    provider.validate_configuration()
+    scorer = select_quality_scorer(provider.name)
+    interval = poll_interval_s if poll_interval_s is not None else _bounded_float(
+        "HAIR_TWIN_POLL_INTERVAL_SECONDS", 2.0, 0.1, 60.0
+    )
+    state = WorkerRuntimeState(provider.name, scorer.name)
+    port = int(os.environ.get("PORT", os.environ.get("HAIR_TWIN_HEALTH_PORT", "8080")))
+    if port < 0 or port > 65535:
+        raise RuntimeError("worker health port is out of range")
+    server = start_health_server(state, port=port)
+    stop = threading.Event()
+
+    def request_stop(_signum, _frame):
+        state.set_ready(False)
+        stop.set()
+
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, request_stop)
+        signal.signal(signal.SIGINT, request_stop)
+
+    state.set_ready(True)
+    print(f"[ai-worker] provider={provider.name} scorer={scorer.name} ready=true")
+    try:
+        while not stop.is_set():
+            started = time.monotonic()
+            processed = process_once(database, storage, provider, scorer, state.record_outcome)
+            state.record_cycle(processed, time.monotonic() - started)
+            if not processed:
+                stop.wait(interval)
+    finally:
+        state.set_ready(False)
+        server.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":
