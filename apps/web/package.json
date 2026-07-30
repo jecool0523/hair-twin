@@ -10,6 +10,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:supabase": "vitest run src/lib/store/supabase.integration.test.ts",
+    "test:e2e:local": "node ../../scripts/run-local-e2e.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

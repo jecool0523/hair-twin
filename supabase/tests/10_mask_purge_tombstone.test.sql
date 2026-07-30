@@ -12,7 +12,8 @@ insert into public.organizations (id, name) values
 insert into public.salons (id, organization_id, name) values
   ('aaaaaaaa-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001', 'Salon A');
 insert into public.style_presets (id, display_name_ko, category) values
-  ('layered-c-curl', '레이어드 C컬', 'perm');
+  ('layered-c-curl', '레이어드 C컬', 'perm')
+on conflict (id) do nothing;
 insert into public.consultation_sessions (id, salon_id, customer_alias) values
   ('aaaaaaaa-2222-2222-2222-222222222222', 'aaaaaaaa-1111-1111-1111-111111111111', 'A');
 insert into public.source_images
@@ -130,9 +131,18 @@ select throws_ok(
 -- 10: the tombstone stays pinned while the job exists (auditability wins).
 -- ---------------------------------------------------------------------------
 select throws_ok(
-  $$delete from public.mask_contracts
-    where id = 'cccccccc-0000-0000-0000-000000000001'$$,
-  '23001', null,
+  $sql$
+    do $body$
+    begin
+      delete from public.mask_contracts
+       where id = 'cccccccc-0000-0000-0000-000000000001';
+      raise sqlstate 'P0002' using message = 'delete unexpectedly succeeded';
+    exception when integrity_constraint_violation then
+      raise sqlstate 'P0001' using message = 'tombstone delete blocked by integrity constraint';
+    end
+    $body$
+  $sql$,
+  'P0001', 'tombstone delete blocked by integrity constraint',
   'a job-referenced tombstone cannot be deleted'
 );
 

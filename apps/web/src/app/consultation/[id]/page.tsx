@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { ConsultationConsole } from "@/features/consultation/ConsultationConsole";
 import { buildSessionView } from "@/lib/services/views";
+import { withRequestStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ export default async function Page({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const initialSession = await buildSessionView(id);
+  const initialSession = await withRequestStore(() => buildSessionView(id));
   if (!initialSession) notFound();
 
   return (

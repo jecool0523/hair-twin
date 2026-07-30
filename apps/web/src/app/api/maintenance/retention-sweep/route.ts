@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { guard, ok } from "@/lib/http";
 import { runRetentionSweep } from "@/lib/services/retention";
+import { runSupabaseRetentionSweep } from "@/lib/services/supabase-retention";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,9 +28,9 @@ export const dynamic = "force-dynamic";
  * defaulting to open — an unauthenticated deletion endpoint is worse than no
  * endpoint.
  */
-export async function POST(req: Request) {
+async function handle(req: Request) {
   return guard(async () => {
-    const expected = process.env.RETENTION_SWEEP_TOKEN;
+    const expected = process.env.CRON_SECRET ?? process.env.RETENTION_SWEEP_TOKEN;
     if (!expected) {
       return NextResponse.json(
         { error: "retention sweep is not configured" },
@@ -46,10 +47,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
-    const result = await runRetentionSweep();
+    const result =
+      process.env.HAIR_TWIN_STORE === "supabase"
+        ? await runSupabaseRetentionSweep()
+        : await runRetentionSweep();
     return ok(result);
-  });
+  }, { authenticated: false });
 }
+
+export const POST = handle;
+export const GET = handle;
 
 function timingSafeEqual(a: string, b: string): boolean {
   let diff = 0;

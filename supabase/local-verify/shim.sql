@@ -25,7 +25,8 @@ grant usage on schema extensions to anon, authenticated, service_role;
 -- auth.users: only the columns this schema actually references.
 create table auth.users (
   id uuid primary key,
-  email text
+  email text,
+  email_confirmed_at timestamptz
 );
 
 -- auth.uid() reads the request's JWT claims, exactly like Supabase's.

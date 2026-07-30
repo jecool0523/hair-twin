@@ -14,7 +14,8 @@ insert into public.salons (id, organization_id, name) values
   ('bbbbbbbb-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001', 'Salon B');
 
 insert into public.style_presets (id, display_name_ko, category) values
-  ('layered-c-curl', '레이어드 C컬', 'perm');
+  ('layered-c-curl', '레이어드 C컬', 'perm')
+on conflict (id) do nothing;
 
 insert into public.customers (id, salon_id, alias) values
   ('aaaaaaaa-9999-9999-9999-999999999999', 'aaaaaaaa-1111-1111-1111-111111111111', 'A cust');

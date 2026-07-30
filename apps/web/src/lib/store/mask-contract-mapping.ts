@@ -83,7 +83,7 @@ export interface MaskContractRows {
 
 /**
  * Where an asset's bytes live in the private bucket.
- * `<salon_id>/<session_id>/<contract_id>/<kind>.bin` — the salon prefix is what
+ * `<salon_id>/<session_id>/<contract_id>/<kind>.png` — the salon prefix is what
  * the storage RLS policies authorise on (20260715120300_storage.sql).
  */
 export function maskStoragePath(opts: {
@@ -92,7 +92,7 @@ export function maskStoragePath(opts: {
   contractId: string;
   kind: MaskKind;
 }): string {
-  return `${opts.salonId}/${opts.sessionId}/${opts.contractId}/${opts.kind}.bin`;
+  return `${opts.salonId}/${opts.sessionId}/${opts.contractId}/${opts.kind}.png`;
 }
 
 export function toRows(

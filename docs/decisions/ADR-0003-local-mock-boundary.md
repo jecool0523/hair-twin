@@ -1,73 +1,41 @@
-# ADR-0003: Local/Mock Boundary for the First Vertical Slice
+# ADR-0003: Local/mock and production-shaped boundaries
 
 Date: 2026-07-15
-
-## Status
-
-Accepted for the first implementation slice.
-
-## Context
-
-The approved stack (ADR-0001) targets Supabase (Postgres/Auth/Storage/RLS/
-Realtime) and a managed image-editing provider behind an adapter (ADR-0002).
-However, no Supabase project, Vercel project, or image provider/model has been
-chosen yet (handoff §12). The instruction is explicit: **do not connect an
-arbitrary Supabase/Vercel project to production; if the target is undecided,
-build a local/mock boundary with clear interfaces first.**
-
-The first slice must nonetheless run locally and be testable end-to-end with a
-Mock provider, with no secret in the client bundle and no public storage.
+Status: Accepted; production-shaped adapters implemented locally
 
 ## Decision
 
-1. **Persistence** is accessed only through `HairTwinStore`
-   (`apps/web/src/lib/store/types.ts`). The default implementation is an
-   in-process store (`InMemoryStore`) selected by `HAIR_TWIN_STORE=memory`.
-   `HAIR_TWIN_STORE=supabase` is reserved and currently throws, rather than
-   half-connecting to real customer data. The authoritative schema lives in
-   `supabase/migrations` and is applied only once a project is chosen.
+Persistence is accessed through `HairTwinStore`:
 
-2. **Image bytes** are stored privately in the store and served via short-lived
-   media tokens (`/api/media/<token>`), a signed-URL analog. There is no public
-   bucket and no stable public URL.
+- `memory` is an explicit offline development/test implementation.
+- `supabase` is request-scoped, uses the authenticated user's access token,
+  and relies on database membership/RLS for authority.
 
-3. **Generation** goes through the Provider Adapter
-   (`lib/providers/adapter.ts`). The default is `MockHairProvider`; `openai` is
-   selected only when `HAIR_TWIN_PROVIDER=openai` and `OPENAI_API_KEY` is set.
-   Secrets are read server-side only (`server-only` modules) and never reach the
-   browser.
+Media remains private and is served through short-lived, user-bound tokens.
+Generation is deterministic and in-process only in memory mode. Supabase mode
+queues database-owned jobs for the Python worker, whose mutations are limited
+to service-role-only RPCs.
 
-4. **The worker** runs in-process (`lib/services/generation-worker.ts`) using
-   the same adapter + quality-gate contracts as the Python worker skeleton in
-   `workers/ai-worker`. Moving to the Python worker is a lift-and-shift with no
-   product/UI change.
+The provider boundary supports mock and OpenAI Images. Mock is forbidden when
+`HAIR_TWIN_ENV=production`. OpenAI is fail-closed unless external-AI and
+overseas-transfer gates are enabled. Results without real CV measurements are
+hard-blocked.
 
-5. **MediaPipe** is the intended capture/segmentation engine and is represented
-   as a documented seam in the Web Workers
-   (`apps/web/src/workers/*.worker.ts`). A heuristic engine is the active
-   fallback so capture/masking work offline without downloading models. Wiring
-   MediaPipe Tasks Vision is a follow-up.
+Browser segmentation remains a documented trust boundary. The server derives
+all masks from the uploaded region-map bytes, validates their shape and
+plausibility, and binds jobs to immutable versioned mask contracts.
 
 ## Consequences
 
-Positive:
+- The full consultation flow remains available without infrastructure.
+- Production persistence, tenancy, storage, worker, and retention behavior can
+  be verified against a disposable local Supabase stack.
+- Secrets never enter client code; public signup and public buckets stay off.
+- The mock path cannot silently become a production provider.
 
-- Whole consultation flow runs with `npm run dev` and in Node tests, no infra.
-- Clear seams: swapping in Supabase, a real provider, or MediaPipe changes an
-  adapter, not the product.
-- Security invariants (no client secrets, no public storage, consent-gated
-  retention) hold in the mock boundary already.
+## Remaining launch gates
 
-Tradeoffs / explicitly NOT done yet:
-
-- In-memory store is not durable and single-process only.
-- Real identity/landmark/non-hair CV signals are simulated by the mock.
-- OpenAI image-edit call + full mask PNG upload are stubbed.
-- Retention/consent wording are DRAFT pending Korean PIPA legal review.
-
-## Reversal / Next Triggers
-
-- Choose a Supabase project + environment split → implement `SupabaseStore`.
-- Choose the first image provider/model → wire `OpenAIHairProvider` + Python
-  worker; run the ADR-0002 benchmark.
-- Approve legal consent wording + retention periods → replace DRAFT values.
+- Connect reviewed staging Supabase/Vercel targets and verify deployment.
+- Approve Korean consent/retention wording and overseas-provider terms.
+- Benchmark the selected image model and deploy real pixel-based CV scoring.
+- Validate monitoring, invite delivery, scheduled retention, and recovery runbooks.

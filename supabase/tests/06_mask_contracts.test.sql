@@ -17,7 +17,8 @@ insert into public.salons (id, organization_id, name) values
   ('aaaaaaaa-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001', 'Salon A'),
   ('bbbbbbbb-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001', 'Salon B');
 insert into public.style_presets (id, display_name_ko, category) values
-  ('layered-c-curl', '레이어드 C컬', 'perm');
+  ('layered-c-curl', '레이어드 C컬', 'perm')
+on conflict (id) do nothing;
 
 insert into public.consultation_sessions (id, salon_id, customer_alias) values
   ('aaaaaaaa-2222-2222-2222-222222222222', 'aaaaaaaa-1111-1111-1111-111111111111', 'A cust'),
@@ -291,9 +292,22 @@ select throws_ok(
 -- Deleting a contract takes its masks with it, but a job pins it in place so
 -- the record of what was generated cannot silently vanish.
 select throws_ok(
-  $$delete from public.mask_contracts where id = 'cccccccc-0000-0000-0000-000000000002'$$,
-  '23001',
-  null,
+  $sql$
+    do $body$
+    begin
+      delete from public.mask_contracts
+       where id = 'cccccccc-0000-0000-0000-000000000002';
+      raise sqlstate 'P0002' using message = 'delete unexpectedly succeeded';
+    exception when integrity_constraint_violation then
+      -- PostgreSQL reports the composite FK as 23503; PGlite reaches the
+      -- explicit guard first and reports 23001. Both are valid class-23
+      -- integrity failures, so normalise only that class for this assertion.
+      raise sqlstate 'P0001' using message = 'contract delete blocked by integrity constraint';
+    end
+    $body$
+  $sql$,
+  'P0001',
+  'contract delete blocked by integrity constraint',
   'a contract still referenced by a job cannot be deleted out from under it'
 );
 

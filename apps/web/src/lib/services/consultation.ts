@@ -4,7 +4,7 @@
  * and the "auto-QC failures are not auto-shown to the customer" rule.
  */
 import "server-only";
-import { getStore, newId } from "../store";
+import { getActorContext, getStore, isSupabaseMode, newId } from "../store";
 import { audit } from "./audit";
 import { processJob } from "./generation-worker";
 import { getStylePreset } from "../domain/style-presets";
@@ -25,8 +25,6 @@ import {
 import { retryTuning } from "../domain/job";
 import {
   CONSENT_WORDING_VERSION,
-  DEV_SALON_ID,
-  DEV_STYLIST_ID,
   RETENTION,
 } from "../config";
 import type {
@@ -51,11 +49,12 @@ export async function startSession(
   input: StartSessionInput,
 ): Promise<ConsultationSession> {
   const store = getStore();
+  const actor = getActorContext();
   const now = new Date();
   const session: ConsultationSession = {
     id: newId("sess"),
-    salonId: DEV_SALON_ID,
-    stylistId: DEV_STYLIST_ID,
+    salonId: actor.salonId,
+    stylistId: actor.stylistId,
     customerAlias: input.customerAlias,
     stage: "consent",
     note: {
@@ -95,7 +94,7 @@ export async function recordConsent(
     consent,
     stage: "capture",
   });
-  await audit(sessionId, "consent_recorded", DEV_STYLIST_ID, {
+  await audit(sessionId, "consent_recorded", getActorContext().stylistId, {
     saveImages: consent.saveImagesConsented,
     saveReport: consent.saveReportConsented,
     wordingVersion: consent.wordingVersion,
@@ -181,7 +180,7 @@ export async function storeSourceImage(
     sourceImageId: assetId,
     stage: "style",
   });
-  await audit(sessionId, "capture_stored", DEV_STYLIST_ID, {
+  await audit(sessionId, "capture_stored", getActorContext().stylistId, {
     assetId,
     maskContractId: contract.id,
     format: probed.format,
@@ -241,14 +240,14 @@ export async function createGenerationJob(
     selectedStyleId: input.styleId,
     stage: "generating",
   });
-  await audit(sessionId, "job_created", DEV_STYLIST_ID, {
+  await audit(sessionId, "job_created", getActorContext().stylistId, {
     jobId: job.id,
     styleId: input.styleId,
     candidateCount: input.candidateCount,
   });
 
   // Fire-and-forget worker simulation. UI polls status.
-  void processJob(job.id, { attempt: 1 }).catch(() => {
+  if (!isSupabaseMode()) void processJob(job.id, { attempt: 1 }).catch(() => {
     /* errors are recorded on the job itself */
   });
   return job;
@@ -301,13 +300,13 @@ export async function retryJob(
     maskContractId,
     maskContractVersion,
   });
-  await audit(job.sessionId, "job_created", DEV_STYLIST_ID, {
+  await audit(job.sessionId, "job_created", getActorContext().stylistId, {
     jobId,
     retry: true,
     attempt: nextAttempt,
     maskContractId,
   });
-  void processJob(jobId, { attempt: nextAttempt }).catch(() => {});
+  if (!isSupabaseMode()) void processJob(jobId, { attempt: nextAttempt }).catch(() => {});
   return updated;
 }
 
@@ -367,7 +366,7 @@ export async function finalizeDecision(
     const updated = await store.updateSession(sessionId, {
       stage: "discarded",
     });
-    await audit(sessionId, "result_discarded", DEV_STYLIST_ID, {});
+    await audit(sessionId, "result_discarded", getActorContext().stylistId, {});
     return updated;
   }
 
@@ -399,7 +398,7 @@ export async function finalizeDecision(
       });
   }
   const updated = await store.updateSession(sessionId, { stage: "saved" });
-  await audit(sessionId, "result_saved", DEV_STYLIST_ID, {
+  await audit(sessionId, "result_saved", getActorContext().stylistId, {
     savedCandidateIds: candidateIds,
   });
   return updated;

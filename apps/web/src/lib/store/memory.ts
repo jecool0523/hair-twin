@@ -211,5 +211,6 @@ export class InMemoryStore implements HairTwinStore {
 }
 
 export function newId(prefix: string): string {
-  return `${prefix}_${randomUUID()}`;
+  void prefix;
+  return randomUUID();
 }

@@ -1,42 +1,38 @@
-# Hair Twin AI Worker (Python)
+# Hair Twin AI worker
 
-The production home for long-running image generation, mask processing, and
-CV-based quality scoring (ADR-0001, system-design §2). It is **skeleton-only**
-in this first slice: the running consultation flow is driven by the in-process
-worker simulation in `apps/web/src/lib/services/generation-worker.ts`, which
-uses the identical Provider Adapter + Quality Gate contracts. Moving the work
-here requires no product/UI change.
+This dependency-light Python poller is the production-shaped generation path.
+In Supabase mode the web app queues jobs; only the worker may claim and mutate
+their lifecycle.
 
-## Boundary
-
-```
-generation_jobs (Postgres)  --poll-->  worker
-  -> load source image + hair_edit mask (private bucket)
-  -> Provider Adapter (mock | openai | self-hosted)
-  -> CV quality signals (identity / landmark / non-hair diff / realism)
-  -> Quality Gate (same thresholds as the TS domain)
-  -> write generated_assets + quality_checks
-  -> update job status
+```text
+generation_jobs -> claim RPC -> private source + mask download
+  -> provider adapter -> quality gate -> private result upload
+  -> atomic result/QC finish RPC (or retryable/permanent failure RPC)
 ```
 
-## Contracts mirrored from the TS domain
+Implemented controls:
 
-- `app/providers/base.py` ↔ `apps/web/src/lib/providers/adapter.ts`
-- `app/quality/gate.py`   ↔ `apps/web/src/lib/domain/quality.ts`
-- `app/masks/region_map.py` ↔ `apps/web/src/lib/domain/masks.ts`
+- service-role-only claim, transition, finish, and failure RPCs;
+- tenant/session path validation in both database and Storage adapters;
+- lossless grid-PNG decoding and source-sized RGBA edit-mask conversion;
+- deterministic mock provider only when both `HAIR_TWIN_PROVIDER=mock` and
+  `HAIR_TWIN_ALLOW_MOCK=true` are explicitly set;
+- OpenAI Images multipart edit transport, bounded retries, and safe errors;
+- cleanup of uploaded results when database finalization fails;
+- hard blocking of unmeasured external results.
 
-Keep the thresholds and status enums in sync across both implementations.
+The quality status and exposure policy mirror the TypeScript domain. Real
+pixel-based identity, landmark, non-hair, and realism measurement is still a
+production launch gate; vectors and image intermediates must remain in memory.
 
-## Not wired yet (ADR-0003)
+Run tests and the worker:
 
-- Supabase connection (poller + storage) — placeholders in `app/storage/`.
-- Real OpenAI image-edit call + CV models — `providers/openai_image_edit.py`,
-  `quality/` are stubs.
-
-## Run (once wired)
-
-```
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+```powershell
+python -m unittest discover -s tests -v
 python -m app.main
 ```
+
+`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, provider settings, and the explicit
+external-transfer gates are required for the production-shaped process.
+Provider responses and decoded mask/source dimensions are bounded before
+allocation; private object paths must match the claimed salon and session.

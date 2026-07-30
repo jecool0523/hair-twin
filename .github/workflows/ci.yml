@@ -134,6 +134,33 @@ jobs:
       - name: pgTAP (supabase test db)
         run: supabase test db
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies (locked)
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Export disposable local integration settings
+        run: node scripts/export-local-supabase-env.mjs
+
+      - name: Auth + PostgREST + Storage integration
+        working-directory: apps/web
+        run: npm run test:supabase
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Full local HTTP journey + Python worker
+        working-directory: apps/web
+        run: npm run test:e2e:local
+        env:
+          PYTHON_EXECUTABLE: python
+
       - name: Show migration list
         if: always()
         run: supabase migration list --local

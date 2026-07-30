@@ -60,8 +60,12 @@ class HairGenerationRequest:
     mode: GenerationMode
     style_id: str
     source_asset_id: str
+    source_mime: str
+    hair_edit_mask_asset_id: str
     source_width: int
     source_height: int
+    mask_width: int
+    mask_height: int
     mask_summary: dict
     prompt_positive: str
     prompt_negative: str

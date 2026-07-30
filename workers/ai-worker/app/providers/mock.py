@@ -24,6 +24,9 @@ class MockHairProvider(HairGenerationProvider):
     model = "mock-hair-preview-1"
 
     def generate(self, request: HairGenerationRequest, load_source_bytes):
+        source = load_source_bytes(request.source_asset_id)
+        if not source:
+            raise ValueError("mock source asset missing")
         candidates: list[ProviderCandidate] = []
         edit_cov = float(request.mask_summary.get("hairEditCoverage", 0.18))
         expansion = float(request.mask_summary.get("expansionRadius", 6))
@@ -50,8 +53,11 @@ class MockHairProvider(HairGenerationProvider):
 
             candidates.append(
                 ProviderCandidate(
-                    image_bytes=b"",  # real worker renders/edits pixels here
-                    mime="image/png",
+                    # The mock path is a deterministic pipeline fixture, not a
+                    # fake production generator. Copying the private source lets
+                    # Storage/QC/lifecycle tests exercise real binary handling.
+                    image_bytes=source,
+                    mime=request.source_mime,
                     seed=seed,
                     signals=QualitySignals(
                         identity_similarity=identity,

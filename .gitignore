@@ -30,6 +30,10 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Supabase CLI runtime state
+supabase/.branches/
+supabase/.temp/
+
 # Editor / OS
 .vscode/*
 !.vscode/extensions.json

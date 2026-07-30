@@ -15,9 +15,9 @@ class HairGenerationProvider(ABC):
     def generate(
         self,
         request: HairGenerationRequest,
-        load_source_bytes,
+        load_asset_bytes,
     ) -> HairGenerationResult:
-        """load_source_bytes: Callable[[str], bytes | None]."""
+        """load_asset_bytes: Callable[[str], bytes | None]."""
         raise NotImplementedError
 
 

@@ -37,7 +37,9 @@ jwt_expiry = 3600
 enable_signup = false
 
 [auth.email]
-enable_signup = false
+# Keep the email/password provider enabled so invited/admin-created users can
+# sign in. Global auth.enable_signup=false above still blocks public sign-up.
+enable_signup = true
 enable_confirmations = false
 
 [storage]
