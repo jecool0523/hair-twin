@@ -1,27 +1,32 @@
 # Hair Twin staging connection runbook
 
-This runbook prepares a staging-first deployment without selecting or creating
-external resources. The repository is currently **not linked** to Supabase,
-Vercel, a worker host, an AI model, a CV service, or an invite-email provider.
-Production is out of scope.
+This runbook prepares an isolated staging deployment. It must create new
+resources and must not reuse or modify an existing GitHub repository, Supabase
+project, Vercel project, or Railway project. Until creation succeeds, the
+repository remains unlinked. Production is out of scope.
 
-## Approval checkpoint
+## Approved staging targets
 
-Before any external change, record approval for all applicable targets:
+The 2026-08-01 staging policy selected the first available names below. Report
+them immediately before creation and record the identifiers returned by each
+service, but never record a secret value.
 
 | Decision | Required value |
 | --- | --- |
-| Supabase | staging project ref and region |
-| Web | Vercel team/project and staging domain |
-| Worker | hosting target and service name |
-| AI | provider, exact model, quality, image size, call count, cost ceiling |
-| Privacy | approved overseas-transfer and customer notice wording |
-| QC | CV service/model, retention behavior, and measured thresholds |
+| GitHub | private `jecool0523/hair-twin`; local remote `hair-twin-demo`; default branch `main` |
+| Supabase | new `hair-twin-staging`; Seoul `ap-northeast-2`; project ref assigned on creation |
+| Web | authenticated personal Vercel scope; new `hair-twin-staging`; `apps/web`; Preview |
+| Worker | new Railway project `hair-twin-staging`; persistent service `hair-twin-ai-worker-staging` |
+| AI | OpenAI `gpt-image-2-2026-04-21`, medium, source size, one candidate, one HTTP attempt |
+| Privacy | nonpersonal fixture transfer to OpenAI is approved for this one staging demo |
+| QC | pinned worker-local YuNet/SFace adapter; no additional image transfer |
 | Invites | email provider and verified sender/domain |
 
-Do not infer a value from an example. Confirm the target and expected impact
-immediately before linking, creating resources, setting environment variables,
-applying migrations, or deploying.
+If a selected name becomes unavailable, use `hair-twin-demo`, then
+`hair-twin-staging-kr`; never append an arbitrary number. Supabase project cost
+must still be displayed and confirmed through the connected Supabase workflow.
+Creating a paid Vercel team or exceeding a Railway spending cap requires a new
+approval.
 
 ## Topology and trust boundaries
 
@@ -36,7 +41,7 @@ staging Supabase Auth/Postgres/private Storage
 hosting-neutral Python worker -------------+
   | explicit transfer gates + call budget
   +--> approved image provider
-  +--> approved CV scorer (not implemented; fail-closed today)
+  +--> pinned local CV scorer (fail-closed remains the default)
 ```
 
 The browser receives only `NEXT_PUBLIC_SUPABASE_URL` and
@@ -46,8 +51,8 @@ secret stores and never use a `NEXT_PUBLIC_` prefix.
 
 ## Supabase staging procedure
 
-1. Confirm the exact staging project ref, region, and that it contains no
-   production/customer data.
+1. Create the new `hair-twin-staging` project in Seoul and confirm its assigned
+   project ref. Never connect an existing project or add production/customer data.
 2. Review `supabase migration list --linked` against the local migrations.
    Report every pending forward migration and its impact before applying it.
 3. Confirm public signup remains disabled and configure the staging site URL
@@ -68,8 +73,9 @@ production restore.
 
 ## Web staging procedure
 
-1. Confirm the Vercel team/project and whether staging is Preview or a custom
-   environment. Link only that approved target.
+1. Create `hair-twin-staging` in the authenticated personal scope, connect only
+   the new private GitHub repository, set Root Directory to `apps/web`, and use
+   Preview. Do not create a paid team.
 2. Add public variables from `apps/web/.env.example` to the staging scope. Add
    server-only values as sensitive variables. Review scope before each write
    because environment changes affect only new deployments.
@@ -86,7 +92,8 @@ production restore.
 
 ## Worker staging procedure
 
-Build `workers/ai-worker/Dockerfile` on the approved worker host. It runs as a
+Build `workers/ai-worker/Dockerfile` as the persistent Railway service
+`hair-twin-ai-worker-staging` in the new `hair-twin-staging` project. It runs as a
 non-root user, polls one database-owned job at a time, handles SIGTERM/SIGINT,
 and exposes:
 
@@ -128,23 +135,27 @@ must therefore also fix the worker replica count and test window; it is not a
 durable billing limit. Use the provider account's own budget alert/hard limit
 when the selected provider supports one.
 
-State that count and price source immediately before requesting approval for a
-paid call. With the current defaults the maximum is zero calls and zero cost.
+State the count and current official price immediately before the call. The
+single nonpersonal staging call described above is pre-approved, so no second
+approval question is required. Any retry, second call, extra candidate/replica,
+different model/quality/size, customer image, non-staging environment, or
+external CV transfer requires a new approval. Keep the default budget at zero
+until the pre-call report is sent and the deployed worker is ready.
 
-The current scorer is `fail_closed`. It returns deliberately failing identity,
-landmark, non-hair, coverage, face-count, realism, and style signals. This means
-unmeasured external results are private hard failures. They cannot receive a
-stylist `usable` verdict or become customer-visible. Do not switch this setting
-until an approved scorer implements the in-memory input/output contract and
-passes timeout, error, retention, threshold, and exposure tests.
+The default scorer is `fail_closed`. The explicit `local_cv` option uses pinned
+YuNet/SFace models inside the worker and makes no additional image transfer.
+Unmeasured or invalid results remain private hard failures and cannot receive a
+stylist `usable` verdict. See `actual-ai-demo.md` for versions, licenses,
+measurements, timeout/memory bounds, and the paid-call checkpoint.
 
 ## Verification and handoff
 
 Run web unit/integration tests, Python tests, typecheck, lint, production build,
 runtime dependency audit, dependency-tree validation, strict pgTAP plus runner
 self-test, local Supabase Auth/PostgREST/Storage journeys, `git diff --check`,
-and a secret-pattern review. Hosted browser and real-AI checks remain blocked
-until the targets and paid-call approval above are supplied.
+and a secret-pattern review. Hosted browser and real-AI checks begin only after
+the new isolated resources, secret stores, migrations, and readiness checks are
+complete.
 
 Record staging resource identifiers (never secrets), deployment URLs, migration
 state, test results, actual external call count/cost, and every unresolved gate.

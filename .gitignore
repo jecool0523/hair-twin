@@ -30,6 +30,9 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Local-only synthetic demo assets and generated results (never commit images)
+.hair-twin-demo/
+
 # Supabase CLI runtime state
 supabase/.branches/
 supabase/.temp/
