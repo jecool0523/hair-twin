@@ -48,10 +48,16 @@ function uiStage(s: SessionView): string {
 export function ConsultationConsole({
   sessionId,
   initialSession,
+  generationPolicy,
 }: {
   sessionId: string;
   /** Server-rendered initial state, so there is no "starting…" flash. */
   initialSession: SessionView;
+  generationPolicy: {
+    candidateOptions: number[];
+    defaultCandidateCount: number;
+    costNoticeKo: string;
+  };
 }) {
   const router = useRouter();
   const [session, setSession] = useState<SessionView>(initialSession);
@@ -333,7 +339,11 @@ export function ConsultationConsole({
 
       {stage === "style" && (
         <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-          <StylePicker onGenerate={onGenerate} busy={busy} />
+          <StylePicker
+            onGenerate={onGenerate}
+            busy={busy}
+            policy={generationPolicy}
+          />
           <SourcePreview url={session.sourceUrl} />
         </div>
       )}

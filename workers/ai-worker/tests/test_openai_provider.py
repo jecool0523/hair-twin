@@ -21,23 +21,23 @@ REQUEST = HairGenerationRequest(
     source_asset_id="source",
     source_mime="image/png",
     hair_edit_mask_asset_id="mask",
-    source_width=2,
-    source_height=2,
+    source_width=1024,
+    source_height=1024,
     mask_width=2,
     mask_height=2,
     mask_summary={"hairEditCoverage": 0.5},
     prompt_positive="Change only the hairstyle.",
     prompt_negative="Do not change identity or background.",
 )
-PNG = hair_edit_grid_to_png(bytes((1, 0, 0, 1)), 2, 2, 2, 2)
+PNG = hair_edit_grid_to_png(bytes((1, 0, 0, 1)), 2, 2, 1024, 1024)
 
 
 def approved_env(**overrides: str) -> dict[str, str]:
     env = {
         "OPENAI_API_KEY": "test-key",
-        "OPENAI_IMAGE_MODEL": "approved-test-model",
-        "OPENAI_IMAGE_QUALITY": "low",
-        "OPENAI_IMAGE_SIZE": "1024x1024",
+        "OPENAI_IMAGE_MODEL": "gpt-image-2-2026-04-21",
+        "OPENAI_IMAGE_QUALITY": "medium",
+        "OPENAI_IMAGE_SIZE": "source",
         "OPENAI_IMAGE_MAX_CALLS_PER_PROCESS": "1",
         "HAIR_TWIN_ENABLE_EXTERNAL_AI": "true",
         "HAIR_TWIN_OVERSEAS_TRANSFER_CONSENT": "true",
@@ -91,13 +91,40 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(observed["url"], "https://api.openai.com/v1/images/edits")
         self.assertIn(PNG, observed["body"])
         self.assertNotIn(base64.b64encode(PNG), observed["body"])
-        self.assertIn(b' name="quality"\r\n\r\nlow', observed["body"])
+        self.assertIn(b' name="quality"\r\n\r\nmedium', observed["body"])
         self.assertIn(b' name="size"\r\n\r\n1024x1024', observed["body"])
+        self.assertNotIn(b' name="input_fidelity"', observed["body"])
         self.assertEqual(observed["authorization"], "Bearer test-key")
-        self.assertEqual(result.model, "approved-test-model")
+        self.assertEqual(result.model, "gpt-image-2-2026-04-21")
         self.assertEqual(result.candidates[0].image_bytes, PNG)
         self.assertIsNone(result.candidates[0].signals)
-        self.assertEqual(result.candidates[0].raw_provider_metadata["width"], 2)
+        self.assertEqual(result.candidates[0].raw_provider_metadata["width"], 1024)
+
+    def test_source_size_contract_and_actual_provider_limit_fail_before_http(self):
+        calls = 0
+
+        def transport(_request, _timeout):
+            nonlocal calls
+            calls += 1
+            return 200, b"{}"
+
+        invalid_size = HairGenerationRequest(**{**REQUEST.__dict__, "source_width": 1000})
+        with patch.dict(os.environ, approved_env(), clear=True):
+            with self.assertRaises(ProviderError) as invalid:
+                OpenAIImageEditProvider(transport=transport).generate(
+                    invalid_size,
+                    lambda asset_id: PNG if asset_id == "source" else bytes((1, 0, 0, 1)),
+                )
+            self.assertFalse(invalid.exception.retryable)
+
+            over_limit = HairGenerationRequest(**{**REQUEST.__dict__, "candidate_count": 2})
+            with self.assertRaises(ProviderError) as limited:
+                OpenAIImageEditProvider(transport=transport).generate(
+                    over_limit,
+                    lambda asset_id: PNG if asset_id == "source" else bytes((1, 0, 0, 1)),
+                )
+            self.assertIn("후보", limited.exception.user_message_ko)
+        self.assertEqual(calls, 0)
 
     def test_rate_limit_is_retryable_and_malformed_response_is_safe(self):
         loader = lambda asset_id: PNG if asset_id == "source" else bytes((1, 0, 0, 1))

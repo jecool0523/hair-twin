@@ -41,6 +41,7 @@ import type {
   PreflightMeta,
   StartSessionInput,
 } from "../validation/schemas";
+import { assertCandidateCountAllowed } from "../domain/generation-policy";
 
 /** Default plausible-growth ring for the first attempt (design §6). */
 export const DEFAULT_EXPANSION_RADIUS = 6;
@@ -201,6 +202,7 @@ export async function createGenerationJob(
   sessionId: string,
   input: CreateJobInput,
 ): Promise<GenerationJob | undefined> {
+  assertCandidateCountAllowed(input.candidateCount);
   const store = getStore();
   const session = await store.getSession(sessionId);
   if (!session || !session.sourceImageId) return undefined;

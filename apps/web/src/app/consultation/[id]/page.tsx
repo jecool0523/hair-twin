@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { ConsultationConsole } from "@/features/consultation/ConsultationConsole";
 import { buildSessionView } from "@/lib/services/views";
 import { withRequestStore } from "@/lib/store";
+import { generationPolicy } from "@/lib/domain/generation-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ export default async function Page({
       <ConsultationConsole
         sessionId={id}
         initialSession={initialSession}
+        generationPolicy={generationPolicy()}
       />
     </main>
   );

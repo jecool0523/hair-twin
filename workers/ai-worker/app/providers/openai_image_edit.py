@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import struct
 import time
 import urllib.error
 import urllib.request
@@ -20,7 +21,9 @@ DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_REQUEST_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_SOURCE_BYTES = 10 * 1024 * 1024
 ALLOWED_QUALITIES = {"low", "medium", "high", "auto"}
-ALLOWED_SIZES = {"1024x1024", "1024x1536", "1536x1024", "auto"}
+# `source` is an internal Hair Twin sentinel. It is resolved to an explicit
+# width/height before the multipart request and is never sent verbatim.
+ALLOWED_SIZES = {"1024x1024", "1024x1536", "1536x1024", "auto", "source"}
 
 
 def _enabled(name: str) -> bool:
@@ -55,6 +58,45 @@ def _valid_source_signature(mime: str, data: bytes) -> bool:
     if mime == "image/webp":
         return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
     return False
+
+
+def _source_dimensions(mime: str, data: bytes) -> tuple[int, int]:
+    if mime == "image/png":
+        return png_dimensions(data)
+    if mime == "image/jpeg":
+        offset = 2
+        while offset + 9 < len(data):
+            if data[offset] != 0xFF:
+                offset += 1
+                continue
+            marker = data[offset + 1]
+            if marker == 0xD8 or marker == 0x01 or 0xD0 <= marker <= 0xD7:
+                offset += 2
+                continue
+            length = struct.unpack(">H", data[offset + 2 : offset + 4])[0]
+            is_sof = 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC)
+            if is_sof:
+                height = struct.unpack(">H", data[offset + 5 : offset + 7])[0]
+                width = struct.unpack(">H", data[offset + 7 : offset + 9])[0]
+                return width, height
+            if length <= 0:
+                break
+            offset += 2 + length
+    if mime == "image/webp" and len(data) >= 30:
+        chunk = data[12:16]
+        if chunk == b"VP8 " and data[23:26] == b"\x9d\x01\x2a":
+            return (
+                struct.unpack("<H", data[26:28])[0] & 0x3FFF,
+                struct.unpack("<H", data[28:30])[0] & 0x3FFF,
+            )
+        if chunk == b"VP8L":
+            bits = struct.unpack("<I", data[21:25])[0]
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        if chunk == b"VP8X":
+            width = int.from_bytes(data[24:27], "little") + 1
+            height = int.from_bytes(data[27:30], "little") + 1
+            return width, height
+    raise ValueError("unsupported or malformed source dimensions")
 
 
 def _multipart(fields: dict[str, str], files: dict[str, tuple[str, str, bytes]]) -> tuple[bytes, str]:
@@ -100,7 +142,7 @@ class OpenAIImageEditProvider(HairGenerationProvider):
         self._key = os.environ.get("OPENAI_API_KEY")
         self._transport = transport or _default_transport
         self._timeout = _bounded_float("OPENAI_IMAGE_TIMEOUT_SECONDS", 90, 1, 300)
-        self._max_retries = _bounded_int("OPENAI_IMAGE_MAX_RETRIES", 2, 0, 3)
+        self._max_retries = _bounded_int("OPENAI_IMAGE_MAX_RETRIES", 0, 0, 3)
         self._max_response_bytes = _bounded_int(
             "OPENAI_IMAGE_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES, 1024, 64 * 1024 * 1024
         )
@@ -154,6 +196,35 @@ class OpenAIImageEditProvider(HairGenerationProvider):
             )
         self._calls += 1
 
+    def _request_size(self, width: int, height: int) -> str:
+        if self.size != "source":
+            return self.size
+        if not (self.model == "gpt-image-2" or self.model.startswith("gpt-image-2-")):
+            raise ProviderError(
+                "source-sized output requires GPT Image 2",
+                retryable=False,
+                user_message_ko="입력과 같은 크기 생성은 승인된 GPT Image 2 모델에서만 사용할 수 있습니다.",
+            )
+        pixels = width * height
+        aspect = max(width / height, height / width)
+        if (
+            width % 16 != 0
+            or height % 16 != 0
+            or max(width, height) > 3840
+            or aspect > 3
+            or pixels < 655_360
+            or pixels > 8_294_400
+        ):
+            raise ProviderError(
+                "source dimensions are not supported by GPT Image 2",
+                retryable=False,
+                user_message_ko=(
+                    "원본 크기는 가로·세로가 16의 배수이고, 긴 변 3840px 이하, "
+                    "종횡비 3:1 이하, 총 655,360~8,294,400 픽셀이어야 합니다."
+                ),
+            )
+        return f"{width}x{height}"
+
     def generate(self, request: HairGenerationRequest, load_asset_bytes) -> HairGenerationResult:
         self._preflight()
         source = load_asset_bytes(request.source_asset_id)
@@ -170,11 +241,28 @@ class OpenAIImageEditProvider(HairGenerationProvider):
                 retryable=False,
                 user_message_ko="원본 이미지 형식이나 크기를 확인할 수 없습니다.",
             )
+        try:
+            actual_source_dimensions = _source_dimensions(request.source_mime, source)
+        except ValueError as error:
+            raise ProviderError(
+                "source dimensions could not be parsed",
+                retryable=False,
+                user_message_ko="원본 이미지 크기를 안전하게 확인할 수 없습니다.",
+            ) from error
+        if actual_source_dimensions != (request.source_width, request.source_height):
+            raise ProviderError(
+                "source image dimensions do not match the persisted contract",
+                retryable=False,
+                user_message_ko="원본 이미지 크기가 저장된 상담 정보와 일치하지 않습니다.",
+            )
         if request.candidate_count < 1 or request.candidate_count > self._max_candidates:
             raise ProviderError(
                 "candidate count exceeds approved per-job limit",
                 retryable=False,
-                user_message_ko="한 작업의 AI 생성 개수가 승인된 한도를 넘었습니다.",
+                user_message_ko=(
+                    f"현재 실제 AI 설정에서는 후보 {self._max_candidates}개 이하만 "
+                    "생성할 수 있습니다."
+                ),
             )
         try:
             mask = hair_edit_grid_to_png(
@@ -191,19 +279,28 @@ class OpenAIImageEditProvider(HairGenerationProvider):
                 user_message_ko="머리카락 편집 영역이 올바르지 않습니다.",
             ) from error
 
+        request_size = self._request_size(request.source_width, request.source_height)
         fields = {
             "model": self.model,
             "prompt": request.prompt_positive,
             "n": str(request.candidate_count),
             "output_format": "png",
-            "input_fidelity": "high",
             "quality": self.quality,
-            "size": self.size,
+            "size": request_size,
         }
+        # GPT Image 2 applies high input fidelity automatically and requires
+        # this optional field to be omitted for that model family.
+        if not (self.model == "gpt-image-2" or self.model.startswith("gpt-image-2-")):
+            fields["input_fidelity"] = "high"
+        source_extension = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/webp": "webp",
+        }[request.source_mime]
         body, content_type = _multipart(
             fields,
             {
-                "image": ("source", request.source_mime, source),
+                "image": (f"source.{source_extension}", request.source_mime, source),
                 "mask": ("hair-edit-mask.png", "image/png", mask),
             },
         )
@@ -253,8 +350,22 @@ class OpenAIImageEditProvider(HairGenerationProvider):
             if not images or any(not image.startswith(PNG_SIGNATURE) for image in images):
                 raise ValueError("missing PNG output")
             dimensions = [png_dimensions(image) for image in images]
-            if any(width <= 0 or height <= 0 or width > 4096 or height > 4096 for width, height in dimensions):
-                raise ValueError("invalid PNG output dimensions")
+            expected_dimensions = (
+                (request.source_width, request.source_height)
+                if self.size == "source"
+                else tuple(int(part) for part in request_size.split("x"))
+                if request_size != "auto"
+                else None
+            )
+            if any(
+                width <= 0
+                or height <= 0
+                or width > 4096
+                or height > 4096
+                or (expected_dimensions is not None and (width, height) != expected_dimensions)
+                for width, height in dimensions
+            ):
+                raise ValueError("invalid or unexpected PNG output dimensions")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise ProviderError(
                 "malformed OpenAI image response",

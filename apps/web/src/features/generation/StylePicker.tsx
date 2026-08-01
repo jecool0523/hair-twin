@@ -10,12 +10,18 @@ import { Sparkles } from "lucide-react";
 export function StylePicker({
   onGenerate,
   busy,
+  policy,
 }: {
   onGenerate: (styleId: string, candidateCount: number) => void;
   busy?: boolean;
+  policy: {
+    candidateOptions: number[];
+    defaultCandidateCount: number;
+    costNoticeKo: string;
+  };
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [count, setCount] = useState(3);
+  const [count, setCount] = useState(policy.defaultCandidateCount);
 
   return (
     <Card>
@@ -62,7 +68,7 @@ export function StylePicker({
               onChange={(e) => setCount(Number(e.target.value))}
               className="rounded-md border bg-background px-2 py-1"
             >
-              {[2, 3, 4].map((n) => (
+              {policy.candidateOptions.map((n) => (
                 <option key={n} value={n}>
                   {n}개
                 </option>
@@ -77,6 +83,9 @@ export function StylePicker({
             {busy ? "작업 생성 중…" : "생성 시작"}
           </Button>
         </div>
+        <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+          {policy.costNoticeKo}
+        </p>
         <p className="text-xs text-muted-foreground">
           생성 결과는 얼굴/정체성을 유지하고 헤어 영역만 편집하는 통제된
           미리보기입니다. 실제 시술 결과를 보장하지 않습니다.
