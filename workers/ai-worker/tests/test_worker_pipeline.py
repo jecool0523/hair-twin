@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.main import process_once, select_provider
 from app.masks.provider_mask import hair_edit_grid_to_png
 from app.providers.mock import MockHairProvider
+from app.providers.base import ProviderError
 from app.schemas import HairGenerationResult, ProviderCandidate
 from app.storage.supabase_db import SupabaseDatabase
 
@@ -92,6 +93,17 @@ class UnmeasuredRealProvider:
         )
 
 
+class CandidateLimitProvider:
+    name = "openai"
+
+    def generate(self, request, load_asset_bytes):
+        raise ProviderError(
+            "candidate count exceeds approved per-job limit",
+            retryable=False,
+            user_message_ko="현재 실제 AI 설정에서는 후보 1개만 생성할 수 있습니다.",
+        )
+
+
 class WorkerPipelineTest(unittest.TestCase):
     def test_processes_claim_through_qc_and_atomic_finish(self):
         database, storage = FakeDatabase(), FakeStorage()
@@ -109,7 +121,7 @@ class WorkerPipelineTest(unittest.TestCase):
         database, storage = FakeDatabase(fail_finish=True), FakeStorage()
         self.assertTrue(process_once(database, storage, MockHairProvider()))
         self.assertEqual(storage.deleted, [storage.uploaded[0][0]])
-        self.assertEqual(database.failed, (True, "RuntimeError"))
+        self.assertEqual(database.failed, (True, "이미지 생성 또는 품질검사 처리에 실패했습니다."))
 
     def test_unmeasured_real_candidate_is_persisted_only_as_hard_blocked(self):
         database, storage = FakeDatabase(), FakeStorage()
@@ -132,6 +144,15 @@ class WorkerPipelineTest(unittest.TestCase):
                 select_provider()
         with patch.dict(os.environ, {"HAIR_TWIN_PROVIDER": "mock", "HAIR_TWIN_ALLOW_MOCK": "true"}, clear=True):
             self.assertIsInstance(select_provider(), MockHairProvider)
+
+    def test_provider_limit_error_is_recorded_as_a_hard_job_failure(self):
+        database, storage = FakeDatabase(), FakeStorage()
+        self.assertTrue(process_once(database, storage, CandidateLimitProvider()))
+        self.assertEqual(
+            database.failed,
+            (False, "현재 실제 AI 설정에서는 후보 1개만 생성할 수 있습니다."),
+        )
+        self.assertEqual(storage.uploaded, [])
 
     def test_postgrest_client_calls_only_worker_rpc_surface(self):
         urls = []

@@ -20,16 +20,16 @@ Implemented controls:
 - OpenAI Images multipart edit transport, bounded retries, and safe errors;
 - explicit model/quality/size selection and a process-wide HTTP-attempt budget;
 - cleanup of uploaded results when database finalization fails;
-- a separate CV-scoring contract with hard blocking of unmeasured results;
+- a pinned local OpenCV YuNet/SFace scorer plus hard blocking of unmeasured results;
 - graceful termination plus `/healthz`, `/readyz`, and aggregate `/metrics`;
 - a non-root, hosting-neutral OCI image definition.
 
-The quality status and exposure policy mirror the TypeScript domain. Because no
-CV service/model is approved, `HAIR_TWIN_CV_PROVIDER=fail_closed` is the only
-real-provider staging-safe setting: generated pixels can be stored privately,
-but their QC is a hard failure and they cannot be shown or approved. A future
-scorer must implement `app.quality.scorer.QualityScorer`; vectors and image
-intermediates must remain in memory.
+The quality status and exposure policy mirror the TypeScript domain.
+`HAIR_TWIN_CV_PROVIDER=fail_closed` remains the safe default. The explicit
+`local_cv` adapter uses pinned OpenCV 4.13.0.92, MIT-licensed YuNet, and
+Apache-2.0 SFace inside a bounded child process. Vectors and image intermediates
+remain in memory. Model files are downloaded from the official OpenCV Zoo and
+SHA-256 verified during the Docker build; they are not committed.
 
 Run tests and the worker:
 
@@ -45,5 +45,10 @@ allocation; private object paths must match the claimed salon and session.
 
 The worker refuses real-provider startup unless model, quality, size, privacy
 gates, API key, and `OPENAI_IMAGE_MAX_CALLS_PER_PROCESS > 0` are all explicit.
-Retries consume that same call budget. Use `.env.example` only as a variable
+Retries consume that same call budget. The actual demo defaults to zero retries,
+one candidate, and a `source` size resolved to an explicit GPT Image 2 size.
+Use `.env.example` only as a variable
 inventory; never commit its filled-in copy.
+
+See `docs/operations/actual-ai-demo.md` for metrics, licenses, cost approval,
+retention, and the end-to-end demo procedure.

@@ -11,6 +11,7 @@ apps/web/src/lib/domain/visibility.ts.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from app.schemas import QualitySignals, QualityStatus
 
@@ -61,6 +62,28 @@ def is_customer_visible(result: QualityResult, stylist_verdict: str | None) -> b
 def evaluate(sig: QualitySignals, t: Thresholds = Thresholds()) -> QualityResult:
     hard: list[str] = []
     soft: list[str] = []
+
+    bounded = (
+        sig.identity_similarity,
+        sig.landmark_delta,
+        sig.non_hair_diff,
+        sig.hair_coverage_ratio,
+        sig.realism_score,
+        sig.style_match,
+    )
+    if (
+        any(not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value > 1 for value in bounded)
+        or isinstance(sig.face_count, bool)
+        or not isinstance(sig.face_count, int)
+        or sig.face_count < 0
+        or sig.face_count > 20
+    ):
+        return QualityResult(
+            QualityStatus.BLOCKED_POLICY_OR_SAFETY,
+            True,
+            soft,
+            ["품질 측정값이 유효한 범위가 아닙니다."],
+        )
 
     if sig.face_count != 1:
         hard.append(f"얼굴 {sig.face_count}개 (1개여야 함)")

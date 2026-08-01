@@ -52,6 +52,16 @@ class QualitySignals:
     style_match: float
 
 
+@dataclass(frozen=True)
+class QualityScoringResult:
+    signals: QualitySignals
+    scorer: str
+    model: str
+    measured: bool
+    duration_ms: int
+    failure_code: str | None = None
+
+
 @dataclass
 class HairGenerationRequest:
     job_id: str

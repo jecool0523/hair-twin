@@ -1,8 +1,8 @@
 """Quality-scoring boundary for generated images.
 
-No CV vendor or model has been approved yet. Real-provider outputs therefore
-use the fail-closed scorer and can never become customer-visible. The mock
-provider may supply deterministic fixture signals for local and CI tests only.
+The fail-closed adapter remains available and is the default. `local_cv` is an
+explicit opt-in and analyzes bytes in a bounded child process; it never sends
+images or embeddings to another service.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.schemas import QualitySignals
+from app.schemas import QualityScoringResult, QualitySignals
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,8 @@ class QualityScoringInput:
     candidate_mime: str
     source_width: int
     source_height: int
+    mask_width: int
+    mask_height: int
     style_id: str
     provider_signals: QualitySignals | None = None
 
@@ -30,7 +32,7 @@ class QualityScorer(Protocol):
     name: str
     timeout_seconds: float
 
-    def score(self, request: QualityScoringInput) -> QualitySignals:
+    def score(self, request: QualityScoringInput) -> QualityScoringResult:
         """Return measured signals without retaining image inputs."""
 
 
@@ -45,10 +47,17 @@ class FailClosedQualityScorer:
             raise RuntimeError("HAIR_TWIN_CV_TIMEOUT_SECONDS must be greater than 0 and at most 120")
         self.timeout_seconds = configured
 
-    def score(self, request: QualityScoringInput) -> QualitySignals:
+    def score(self, request: QualityScoringInput) -> QualityScoringResult:
         # Deliberately fails every hard gate. Missing measurement is not a
         # weak score and must never be interpreted as an approved candidate.
-        return QualitySignals(0.0, 1.0, 1.0, 0.0, 0, 0.0, 0.0)
+        return QualityScoringResult(
+            QualitySignals(0.0, 1.0, 1.0, 0.0, 0, 0.0, 0.0),
+            self.name,
+            "none",
+            False,
+            0,
+            "measurement_unavailable",
+        )
 
 
 class ProviderSignalsQualityScorer:
@@ -57,10 +66,16 @@ class ProviderSignalsQualityScorer:
     name = "provider_signals"
     timeout_seconds = 0.0
 
-    def score(self, request: QualityScoringInput) -> QualitySignals:
+    def score(self, request: QualityScoringInput) -> QualityScoringResult:
         if request.provider_signals is None:
             return FailClosedQualityScorer().score(request)
-        return request.provider_signals
+        return QualityScoringResult(
+            request.provider_signals,
+            self.name,
+            "test-fixture",
+            False,
+            0,
+        )
 
 
 def select_quality_scorer(provider_name: str) -> QualityScorer:
@@ -69,4 +84,8 @@ def select_quality_scorer(provider_name: str) -> QualityScorer:
         return ProviderSignalsQualityScorer()
     if configured in {"", "disabled", "fail_closed"}:
         return FailClosedQualityScorer()
+    if configured == "local_cv":
+        from app.quality.local_cv import LocalCVQualityScorer
+
+        return LocalCVQualityScorer()
     raise RuntimeError("unsupported HAIR_TWIN_CV_PROVIDER")

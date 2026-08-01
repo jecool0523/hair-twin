@@ -1,9 +1,2 @@
-# Pinned when the worker is wired (ADR-0003). Kept minimal on purpose.
-# fastapi>=0.115
-# uvicorn>=0.32
-# pillow>=11
-# numpy>=2.1
-# supabase>=2.9
-# httpx>=0.28
-# Heavy CV/ML deps (opencv, onnxruntime, torch) are added only if managed APIs
-# fail hair-only precision (ADR-0002 reversal triggers).
+numpy==2.5.1
+opencv-python-headless==4.13.0.92

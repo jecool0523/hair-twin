@@ -44,7 +44,8 @@ def _prompt(job: dict) -> tuple[str, str]:
     )
 
 
-def _quality_payload(signals) -> dict:
+def _quality_payload(scored) -> dict:
+    signals = scored.signals
     result = evaluate(signals)
     return {
         "status": result.status.value,
@@ -57,6 +58,13 @@ def _quality_payload(signals) -> dict:
             "face_count": signals.face_count,
             "realism_score": signals.realism_score,
             "style_match": signals.style_match,
+            "measurement": {
+                "scorer": scored.scorer,
+                "model": scored.model,
+                "measured": scored.measured,
+                "duration_ms": scored.duration_ms,
+                "failure_code": scored.failure_code,
+            },
         },
         "soft_flags": result.soft_flags,
         "hard_reasons": result.hard_reasons,
@@ -117,7 +125,7 @@ def process_once(database=None, storage=None, provider=None, scorer=None, on_out
             path = f"{prefix}/{job_id}/{uuid.uuid4()}.{extension}"
             storage.put_generated_asset(path, candidate.image_bytes, candidate.mime)
             uploaded.append(path)
-            signals = scorer.score(
+            scored = scorer.score(
                 QualityScoringInput(
                     source_bytes=source,
                     candidate_bytes=candidate.image_bytes,
@@ -126,6 +134,8 @@ def process_once(database=None, storage=None, provider=None, scorer=None, on_out
                     candidate_mime=candidate.mime,
                     source_width=source_width,
                     source_height=source_height,
+                    mask_width=mask_width,
+                    mask_height=mask_height,
                     style_id=request.style_id,
                     provider_signals=candidate.signals,
                 )
@@ -138,7 +148,7 @@ def process_once(database=None, storage=None, provider=None, scorer=None, on_out
                     "variant_label": f"candidate-{index + 1}",
                     "provider": result.provider,
                     "model": result.model,
-                    "quality": _quality_payload(signals),
+                    "quality": _quality_payload(scored),
                 }
             )
         database.finish(job_id, rows)
@@ -152,7 +162,12 @@ def process_once(database=None, storage=None, provider=None, scorer=None, on_out
             except Exception:
                 pass
         try:
-            database.fail(job_id, bool(getattr(error, "retryable", True)), type(error).__name__)
+            reason = (
+                error.user_message_ko
+                if isinstance(error, ProviderError)
+                else "이미지 생성 또는 품질검사 처리에 실패했습니다."
+            )
+            database.fail(job_id, bool(getattr(error, "retryable", True)), reason)
         except DatabaseError:
             pass
         if on_outcome:

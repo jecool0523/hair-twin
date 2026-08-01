@@ -54,6 +54,32 @@ export function evaluateQuality(
   const hardReasons: string[] = [];
   const softFlags: string[] = [];
 
+  const boundedSignals = [
+    signals.identitySimilarity,
+    signals.landmarkDelta,
+    signals.nonHairDiff,
+    signals.hairCoverageRatio,
+    signals.realismScore,
+    signals.styleMatch,
+  ];
+  if (
+    boundedSignals.some(
+      (value) => !Number.isFinite(value) || value < 0 || value > 1,
+    ) ||
+    !Number.isInteger(signals.faceCount) ||
+    signals.faceCount < 0 ||
+    signals.faceCount > 20
+  ) {
+    return {
+      status: "blocked_policy_or_safety",
+      hardFail: true,
+      hardReasons: ["품질 측정값이 유효한 범위가 아닙니다."],
+      softFlags,
+      signals,
+      evaluatedAt: now.toISOString(),
+    };
+  }
+
   // ---- Hard-fail checks (ai-generation-design §11 "Hard-Fail Checks") ----
   if (signals.faceCount !== 1) {
     hardReasons.push(

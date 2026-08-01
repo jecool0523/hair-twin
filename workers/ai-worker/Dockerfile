@@ -5,6 +5,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN useradd --create-home --uid 10001 hairtwin
 WORKDIR /app
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir --requirement requirements.txt
+COPY scripts/download_cv_models.py ./scripts/download_cv_models.py
+ENV HAIR_TWIN_CV_MODEL_DIR=/app/models
+RUN python ./scripts/download_cv_models.py && chown -R hairtwin:hairtwin /app/models
 COPY --chown=hairtwin:hairtwin app ./app
 USER hairtwin
 

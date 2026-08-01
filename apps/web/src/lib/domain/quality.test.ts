@@ -18,6 +18,13 @@ const good: QualitySignals = {
 };
 
 describe("evaluateQuality", () => {
+  it("fails closed for NaN, Infinity, and out-of-range scorer values", () => {
+    for (const identitySimilarity of [Number.NaN, Number.POSITIVE_INFINITY, -0.1, 1.1]) {
+      const result = evaluateQuality({ ...good, identitySimilarity });
+      expect(result.status).toBe("blocked_policy_or_safety");
+      expect(result.hardFail).toBe(true);
+    }
+  });
   it("accepts a clean candidate", () => {
     const r = evaluateQuality(good);
     expect(r.status).toBe("accepted");
@@ -45,6 +52,24 @@ describe("evaluateQuality", () => {
   it("blocks when more than one face is present", () => {
     const r = evaluateQuality({ ...good, faceCount: 2 });
     expect(r.hardFail).toBe(true);
+  });
+
+  it("blocks when no face is present", () => {
+    const r = evaluateQuality({ ...good, faceCount: 0 });
+    expect(r.status).toBe("blocked_identity_changed");
+    expect(r.hardFail).toBe(true);
+  });
+
+  it("blocks low technical image quality", () => {
+    const r = evaluateQuality({ ...good, realismScore: 0.3 });
+    expect(r.status).toBe("blocked_low_realism");
+    expect(r.hardFail).toBe(true);
+  });
+
+  it("sends a nearly unchanged hairstyle to stylist review", () => {
+    const r = evaluateQuality({ ...good, styleMatch: 0.05 });
+    expect(r.status).toBe("needs_stylist_review");
+    expect(r.hardFail).toBe(false);
   });
 
   it("flags borderline identity for stylist review", () => {
